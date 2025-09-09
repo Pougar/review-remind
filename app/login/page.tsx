@@ -19,8 +19,6 @@ export default function Login() {
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ emailValue, passValue }),
             });
-            console.log(emailValue);
-            console.log(passValue);
             const data = await res.json();
             console.log(data);
             setMessage(data.message);
@@ -59,7 +57,7 @@ export default function Login() {
                 </div>
                 <button 
                     onClick={handleLogin}
-                    disabled={loading}
+                    disabled={loading || !emailValue || !passValue}
                     className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600 ${loading ? 'bg-gray-400 cursor-not-allowed' : 'bg-blue-500'}"
                     >
                     {loading ? 'Logging in...' : 'Login'}
