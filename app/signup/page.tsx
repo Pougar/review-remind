@@ -63,13 +63,16 @@ export default function Signup() {
                     placeholder="Password Again"
                     className="border rounded px-3 py-2 w-64"
                     />
-                    <button
-                        onClick={handleSignup}
-                        disabled={loading || !emailValue || !passValue || passValue !== pass2Value}
-                        className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600 disabled:bg-gray-400"
-                        >
-                        Signup
-                    </button>
+                    <div className="flex flex-col items-center gap-5">
+                        <button
+                            onClick={handleSignup}
+                            disabled={loading || !emailValue || !passValue || passValue !== pass2Value}
+                            className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600 disabled:bg-gray-400"
+                            >
+                            Signup
+                        </button>
+                        {message && <p className="text-red-600 font-semibold">{message}</p>}
+                    </div>
                 </div>
             </div>
         </main>
