@@ -3,10 +3,31 @@
 import { useState } from "react";
 import Link from "next/link";
 
-export default function Login() {
+export default async function Login() {
 
-    const [inputValue, setInputValue] = useState(""); // state to hold input
-    const [secondInput, setSecondInput] = useState("");
+    const [emailValue, setEmailValue] = useState(""); // state to hold input
+    const [passValue, setPassInput] = useState("");
+    const [message, setMessage] = useState("");
+    const [loading, setLoading] = useState(false);
+
+    const handleLogin = async () => {
+        setLoading(true);
+        setMessage('');
+        try {
+            const res = await fetch('/api/login', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ emailValue, passValue }),
+            });
+            const data = await res.json();
+            setMessage(data.message);
+          } catch (err) {
+            setMessage('An error occurred. Please try again.');
+          } finally {
+            setLoading(false); // re-enable button
+          }
+      };
+
     return (
         <main className="min-h-screen flex items-center justify-center">
             <Link 
@@ -20,25 +41,27 @@ export default function Login() {
                 <div className="flex flex-col items-center gap-6">
                     <input
                     type="text"
-                    value={inputValue} // value comes from state
-                    onChange={(e) => setInputValue(e.target.value)} // update state on change
+                    value={emailValue} // value comes from state
+                    onChange={(e) => setEmailValue(e.target.value)} // update state on change
                     placeholder="Email"
                     className="border rounded px-3 py-2 w-64"
                     />
                     <input
                     type="text"
-                    value={secondInput} // value comes from state
-                    onChange={(e) => setSecondInput(e.target.value)} // update state on change
+                    value={passValue} // value comes from state
+                    onChange={(e) => setPassInput(e.target.value)} // update state on change
                     placeholder="Password"
                     className="border rounded px-3 py-2 w-64"
                     />
                 </div>
-                <Link 
-                    href="/"
-                    className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600 transition"
+                <button 
+                    onClick={handleLogin}
+                    disabled={loading}
+                    className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600 ${loading ? 'bg-gray-400 cursor-not-allowed' : 'bg-blue-500'}"
                     >
-                    Login
-                </Link>
+                    {loading ? 'Logging in...' : 'Login'}
+                </button>
+                {message && <p>{message}</p>}
             </div>
         </main>
     );
