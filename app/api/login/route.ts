@@ -5,10 +5,18 @@ import postgres from 'postgres';
 const sql = postgres(process.env.DATABASE_URL!, { ssl: 'require' }); // make sure DATABASE_URL is in .env
 
 export async function POST(req: NextRequest) {
-  console.log("hi im working")
-  const { email, password } = await req.json();
-  console.log(email);
-  console.log(password);
+  const bodyText = await req.text();
+  console.log('Raw request body:', bodyText);
+
+  // Parse JSON
+  let body;
+  try {
+    body = JSON.parse(bodyText);
+  } catch (err) {
+    return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 });
+  }
+
+  const { email, password } = body;
 
   if (!email || !password) {
     return NextResponse.json({ error: 'Missing email or password' }, { status: 400 });
