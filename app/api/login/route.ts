@@ -25,5 +25,5 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ success: false, message: 'Multiple users with same email and password? - Check with support team' });
   }
 
-  return NextResponse.json({ success: true, message: 'Login successful' });
+  return NextResponse.json({ success: true, user: user[0], message: 'Login successful' });
 }

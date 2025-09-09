@@ -5,9 +5,31 @@ import Link from "next/link";
 
 export default function Signup() {
 
-    const [inputValue, setInputValue] = useState(""); // state to hold input
-    const [secondInput, setSecondInput] = useState("");
-    const [thirdInput, setThirdInput] = useState("");
+    const [emailValue, setEmailValue] = useState(""); // state to hold input
+    const [passValue, setPassInput] = useState("");
+    const [pass2Value, setPass2Input] = useState("");
+    const [message, setMessage] = useState("");
+    const [loading, setLoading] = useState(false);
+
+    const handleSignup = async () => {
+        setLoading(true);
+        setMessage('');
+        try {
+            const res = await fetch('/api/signin', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ emailValue, passValue }),
+            });
+            const data = await res.json();
+            setMessage(data.message);
+          } catch (err) {
+            setMessage('An error occurred. Please try again.');
+          } finally {
+            setLoading(false); // re-enable button
+          }
+      };
+
+
     return (
         <main className="min-h-screen flex items-center justify-center">
             <Link 
@@ -21,32 +43,33 @@ export default function Signup() {
                     <h1 className="text-2xl font-semibold text-gray-800 dark:text-gray-100">Sign Up</h1>
                     <input
                     type="text"
-                    value={inputValue} // value comes from state
-                    onChange={(e) => setInputValue(e.target.value)} // update state on change
+                    value={emailValue} // value comes from state
+                    onChange={(e) => setEmailValue(e.target.value)} // update state on change
                     placeholder="Email"
                     className="border rounded px-3 py-2 w-64"
                     />
                     <h1 className="text-xl font-semibold text-gray-800 dark:text-gray-100">New Password</h1>
                     <input
                     type="text"
-                    value={secondInput} // value comes from state
-                    onChange={(e) => setSecondInput(e.target.value)} // update state on change
+                    value={passValue} // value comes from state
+                    onChange={(e) => setPassInput(e.target.value)} // update state on change
                     placeholder="Password"
                     className="border rounded px-3 py-2 w-64"
                     />
                     <input
                     type="text"
-                    value={thirdInput} // value comes from state
-                    onChange={(e) => setThirdInput(e.target.value)} // update state on change
+                    value={pass2Value} // value comes from state
+                    onChange={(e) => setPass2Input(e.target.value)} // update state on change
                     placeholder="Password Again"
                     className="border rounded px-3 py-2 w-64"
                     />
-                    <Link 
-                        href="/"
-                        className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600 transition"
+                    <button
+                        onClick={handleSignup}
+                        disabled={loading || !emailValue || !passValue || passValue !== pass2Value}
+                        className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600 disabled:bg-gray-400"
                         >
                         Signup
-                    </Link>
+                    </button>
                 </div>
             </div>
         </main>
