@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 
-export default function Login() {
+export default git function Login() {
 
     const [emailValue, setEmailValue] = useState(""); // state to hold input
     const [passValue, setPassInput] = useState("");
@@ -61,7 +61,7 @@ export default function Login() {
                     >
                     {loading ? 'Logging in...' : 'Login'}
                 </button>
-                {message && <p>{message}</p>}
+                {message && <p className="text-red-600 font-semibold">{message}</p>}
             </div>
         </main>
     );
