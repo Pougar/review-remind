@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import postgres from 'postgres';
+import bcrypt from "bcrypt";
 
 // Connect to your Neon DB
 const sql = postgres(process.env.DATABASE_URL!, { ssl: 'require' }); // make sure DATABASE_URL is in .env
@@ -21,9 +22,10 @@ export async function POST(req: NextRequest) {
   if (user.length === 0) {
     try {
         // Insert a new user
+        const hashed = await bcrypt.hash(passValue, 10);
         const newUser = await sql`
           INSERT INTO users (email, password)
-          VALUES (${emailValue}, ${passValue})
+          VALUES (${emailValue}, ${hashed})
           RETURNING *
         `;
     
