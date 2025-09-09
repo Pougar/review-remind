@@ -55,14 +55,16 @@ export default function Login() {
                     className="border rounded px-3 py-2 w-64"
                     />
                 </div>
+                <div className="flex flex-col items-center gap-5">
                 <button 
                     onClick={handleLogin}
                     disabled={loading || !emailValue || !passValue}
-                    className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600 ${loading ? 'bg-gray-400 cursor-not-allowed' : 'bg-blue-500'}"
+                    className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600 disabled:bg-gray-400 disabled:cursor-not-allowed"
                     >
                     {loading ? 'Logging in...' : 'Login'}
                 </button>
                 {message && <p className="text-red-600 font-semibold">{message}</p>}
+                </div>
             </div>
         </main>
     );
