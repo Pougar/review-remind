@@ -9,6 +9,7 @@ import type { JWT } from "next-auth/jwt";
 const sql = postgres(process.env.DATABASE_URL!, { ssl: 'require' });
 
 export const authOptions: NextAuthOptions = {
+    secret: process.env.NEXTAUTH_SECRET,
   providers: [
     CredentialsProvider({
       name: "Credentials",
