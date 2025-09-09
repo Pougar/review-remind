@@ -56,6 +56,7 @@ export default function Signup() {
                 >
                 Back
             </Link>
+            {error && <p style={{ color: "red" }}>{error}</p>}
             <form onSubmit={handleSubmit}>
                 <div className="relative bg-gray-200 dark:bg-gray-700 rounded-lg shadow-lg w-110 h-100 flex items-center justify-center">
                     <div className="flex flex-col items-center gap-6">
