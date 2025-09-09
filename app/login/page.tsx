@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 
-export default git function Login() {
+export default function Login() {
 
     const [emailValue, setEmailValue] = useState(""); // state to hold input
     const [passValue, setPassInput] = useState("");
