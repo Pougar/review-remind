@@ -8,6 +8,7 @@ export default function Login() {
     const [emailValue, setEmailValue] = useState(""); // state to hold input
     const [passValue, setPassInput] = useState("");
     const [message, setMessage] = useState("");
+    const [success, setSuccess] = useState(false)
     const [loading, setLoading] = useState(false);
 
     const handleLogin = async () => {
@@ -20,8 +21,8 @@ export default function Login() {
               body: JSON.stringify({ emailValue, passValue }),
             });
             const data = await res.json();
-            console.log(data);
             setMessage(data.message);
+            setSuccess(data.success);
           } catch (err) {
             setMessage('An error occurred. Please try again.');
           } finally {
@@ -48,7 +49,7 @@ export default function Login() {
                     className="border rounded px-3 py-2 w-64"
                     />
                     <input
-                    type="text"
+                    type="password"
                     value={passValue} // value comes from state
                     onChange={(e) => setPassInput(e.target.value)} // update state on change
                     placeholder="Password"
@@ -63,7 +64,8 @@ export default function Login() {
                     >
                     {loading ? 'Logging in...' : 'Login'}
                 </button>
-                {message && <p className="text-red-600 font-semibold">{message}</p>}
+                {message && (<p className={success ? "text-blue-600 font-semibold" : "text-red-600 font-semibold"}>{message}</p>)}
+
                 </div>
             </div>
         </main>

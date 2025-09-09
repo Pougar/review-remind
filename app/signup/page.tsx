@@ -9,6 +9,7 @@ export default function Signup() {
     const [passValue, setPassInput] = useState("");
     const [pass2Value, setPass2Input] = useState("");
     const [message, setMessage] = useState("");
+    const [success, setSuccess] = useState(false);
     const [loading, setLoading] = useState(false);
 
     const handleSignup = async () => {
@@ -22,6 +23,7 @@ export default function Signup() {
             });
             const data = await res.json();
             setMessage(data.message);
+            setSuccess(data.success);
           } catch (err) {
             setMessage('An error occurred. Please try again.');
           } finally {
@@ -50,14 +52,14 @@ export default function Signup() {
                     />
                     <h1 className="text-xl font-semibold text-gray-800 dark:text-gray-100">New Password</h1>
                     <input
-                    type="text"
+                    type="password"
                     value={passValue} // value comes from state
                     onChange={(e) => setPassInput(e.target.value)} // update state on change
                     placeholder="Password"
                     className="border rounded px-3 py-2 w-64"
                     />
                     <input
-                    type="text"
+                    type="password"
                     value={pass2Value} // value comes from state
                     onChange={(e) => setPass2Input(e.target.value)} // update state on change
                     placeholder="Password Again"
@@ -71,7 +73,7 @@ export default function Signup() {
                             >
                             Signup
                         </button>
-                        {message && <p className="text-red-600 font-semibold">{message}</p>}
+                        {message && (<p className={success ? "text-blue-600 font-semibold" : "text-red-600 font-semibold"}>{message}</p>)}
                     </div>
                 </div>
             </div>
