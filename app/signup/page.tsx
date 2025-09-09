@@ -49,7 +49,7 @@ export default function Signup() {
       };
 
     return (
-        <main className="min-h-screen flex items-center justify-center">
+        <main className="min-h-screen flex flex-col items-center justify-center gap-2">
             <Link 
                 href="/"
                 className="absolute top-4 left-4 bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600 transition"
@@ -88,12 +88,13 @@ export default function Signup() {
                                 disabled={loading || !email || !password || password !== password2}
                                 className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600 disabled:bg-gray-400"
                                 >
-                                Signup
+                                {loading ? "Signing up..." : "Sign up"}
                             </button>
                         </div>
                     </div>
                 </div>
             </form>
+            <Link href="/login" className="hover:underline">Already have an account?{" "}Click here to log in</Link>
         </main>
     );
 

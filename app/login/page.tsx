@@ -41,7 +41,7 @@ export default function Login() {
         </Link>
         {error && <p style={{ color: "red" }}>{error}</p>}
         <form onSubmit={handleSubmit} className="gap-2">
-          <div className="relative bg-gray-200 dark:bg-gray-700 rounded-lg shadow-lg w-96 h-70 flex flex-col items-center justify-centerm gap-6">
+          <div className="relative bg-gray-200 dark:bg-gray-700 rounded-lg shadow-lg w-96 h-70 flex flex-col items-center justify-center gap-6">
             <h1 className="text-2xl font-semibold text-gray-800 dark:text-gray-100">Log In</h1>
               <input
                 type="email"
@@ -68,7 +68,7 @@ export default function Login() {
               </button>
             </div>
         </form>
-          <Link href="/signup" className="hover:underline">Don&apos;t have an account yet?{" "}Click here to sign up.</Link>
+          <Link href="/signup" className="hover:underline">Don&apos;t have an account yet?{" "}Click here to sign up</Link>
 
       </main>
       );
