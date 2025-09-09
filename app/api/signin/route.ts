@@ -29,7 +29,7 @@ export async function POST(req: NextRequest) {
           RETURNING *
         `;
     
-        return NextResponse.json({ success: true, user: newUser[0], message: 'Account creation successful' });
+        return NextResponse.json({ success: true, user: newUser[0], message: 'Account creation successful', ok: true});
       } catch (err) {
         console.error(err);
         return NextResponse.json({ success: false, error: 'Database error' }, { status: 500 });

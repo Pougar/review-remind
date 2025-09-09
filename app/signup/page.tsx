@@ -20,7 +20,7 @@ export default function Signup() {
         setLoading(true);
     
         // 1. Create user
-        const res = await fetch("/api/auth/signup", {
+        const res = await fetch("/api/signin", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ email, password }),
@@ -68,17 +68,17 @@ export default function Signup() {
                     />
                     <h1 className="text-xl font-semibold text-gray-800 dark:text-gray-100">New Password</h1>
                     <input
-                    type="New Password"
+                    type="password"
                     value={password} // value comes from state
                     onChange={(e) => setPassword(e.target.value)} // update state on change
-                    placeholder="Password"
+                    placeholder="New Password"
                     className="border rounded px-3 py-2 w-64"
                     />
                     <input
                     type="password"
                     value={password2} // value comes from state
                     onChange={(e) => setPassword2(e.target.value)} // update state on change
-                    placeholder="Password Again"
+                    placeholder="New Password Again"
                     className="border rounded px-3 py-2 w-64"
                     />
                     <div className="flex flex-col items-center gap-5">
