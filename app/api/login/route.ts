@@ -16,16 +16,16 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 });
   }
 
-  const { email, password } = body;
+  const { emailValue, passValue } = body;
 
-  if (!email || !password) {
+  if (!emailValue || !passValue) {
     return NextResponse.json({ error: 'Missing email or password' }, { status: 400 });
   }
 
   // Query the database
   const user = await sql`
     SELECT * FROM users
-    WHERE email = ${email} AND password = ${password}
+    WHERE email = ${emailValue} AND password = ${passValue}
   `;
 
   if (user.length === 0) {
