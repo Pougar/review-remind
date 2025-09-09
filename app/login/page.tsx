@@ -5,7 +5,7 @@ import { signIn } from "next-auth/react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 
-export default function Signup() {
+export default function Login() {
 
     const [email, setEmail] = useState(""); // state to hold input
     const [password, setPassword] = useState("");
@@ -30,24 +30,40 @@ export default function Signup() {
     };
 
     return (
+      <main className="min-h-screen flex items-center justify-center">
+        <Link 
+            href="/"
+            className="absolute top-4 left-4 bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600 transition"
+            >
+            Back
+        </Link>
         <form onSubmit={handleSubmit}>
-          <input
-            type="email"
-            placeholder="Email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            required
-          />
-          <input
-            type="password"
-            placeholder="Password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            required
-          />
-          <button type="submit">Log In</button>
-          {error && <p style={{ color: "red" }}>{error}</p>}
+          <div className="relative bg-gray-200 dark:bg-gray-700 rounded-lg shadow-lg w-96 h-64 flex flex-col items-center justify-center">
+            <h1 className="text-2xl font-semibold text-gray-800 dark:text-gray-100">Log In</h1>
+              <input
+                type="email"
+                placeholder="Email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                required
+              />
+              <input
+                type="password"
+                placeholder="Password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+              />
+              <button type="submit">Log In</button>
+              {error && <p style={{ color: "red" }}>{error}</p>}
+            </div>
         </form>
+        <p>
+          Don&apos;t have an account yet?{" "}
+          <Link href="/signup">Click here to sign up</Link>
+        </p>
+
+      </main>
       );
 
 }
