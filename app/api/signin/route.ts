@@ -7,25 +7,25 @@ const sql = postgres(process.env.DATABASE_URL!, { ssl: 'require' }); // make sur
 
 export async function POST(req: NextRequest) {
   
-  const { emailValue, passValue } = await req.json();
-
-  if (!emailValue || !passValue) {
+  const { email, password } = await req.json();
+  console.log("Signup payload:", { email, password });
+  if (!email || !password) {
     return NextResponse.json({ error: 'Missing email or password' }, { status: 400 });
   }
 
   // Query the database
   const user = await sql`
     SELECT * FROM users
-    WHERE email = ${emailValue}
+    WHERE email = ${email}
   `;
 
   if (user.length === 0) {
     try {
         // Insert a new user
-        const hashed = await bcrypt.hash(passValue, 10);
+        const hashed = await bcrypt.hash(password, 10);
         const newUser = await sql`
           INSERT INTO users (email, password)
-          VALUES (${emailValue}, ${hashed})
+          VALUES (${email}, ${hashed})
           RETURNING *
         `;
     
