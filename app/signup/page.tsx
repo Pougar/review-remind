@@ -56,42 +56,44 @@ export default function Signup() {
                 >
                 Back
             </Link>
-            <div className="relative bg-gray-200 dark:bg-gray-700 rounded-lg shadow-lg w-110 h-100 flex items-center justify-center">
-                <div className="flex flex-col items-center gap-6">
-                    <h1 className="text-2xl font-semibold text-gray-800 dark:text-gray-100">Sign Up</h1>
-                    <input
-                    type="email"
-                    value={email} // value comes from state
-                    onChange={(e) => setEmail(e.target.value)} // update state on change
-                    placeholder="Email"
-                    className="border rounded px-3 py-2 w-64"
-                    />
-                    <h1 className="text-xl font-semibold text-gray-800 dark:text-gray-100">New Password</h1>
-                    <input
-                    type="password"
-                    value={password} // value comes from state
-                    onChange={(e) => setPassword(e.target.value)} // update state on change
-                    placeholder="New Password"
-                    className="border rounded px-3 py-2 w-64"
-                    />
-                    <input
-                    type="password"
-                    value={password2} // value comes from state
-                    onChange={(e) => setPassword2(e.target.value)} // update state on change
-                    placeholder="New Password Again"
-                    className="border rounded px-3 py-2 w-64"
-                    />
-                    <div className="flex flex-col items-center gap-5">
-                        <button
-                            onClick={handleSubmit}
-                            disabled={loading || !email || !password || password !== password2}
-                            className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600 disabled:bg-gray-400"
-                            >
-                            Signup
-                        </button>
+            <form onSubmit={handleSubmit}>
+                <div className="relative bg-gray-200 dark:bg-gray-700 rounded-lg shadow-lg w-110 h-100 flex items-center justify-center">
+                    <div className="flex flex-col items-center gap-6">
+                        <h1 className="text-2xl font-semibold text-gray-800 dark:text-gray-100">Sign Up</h1>
+                        <input
+                        type="email"
+                        value={email} // value comes from state
+                        onChange={(e) => setEmail(e.target.value)} // update state on change
+                        placeholder="Email"
+                        className="border rounded px-3 py-2 w-64"
+                        />
+                        <h1 className="text-xl font-semibold text-gray-800 dark:text-gray-100">New Password</h1>
+                        <input
+                        type="password"
+                        value={password} // value comes from state
+                        onChange={(e) => setPassword(e.target.value)} // update state on change
+                        placeholder="New Password"
+                        className="border rounded px-3 py-2 w-64"
+                        />
+                        <input
+                        type="password"
+                        value={password2} // value comes from state
+                        onChange={(e) => setPassword2(e.target.value)} // update state on change
+                        placeholder="New Password Again"
+                        className="border rounded px-3 py-2 w-64"
+                        />
+                        <div className="flex flex-col items-center gap-5">
+                            <button
+                                onClick={handleSubmit}
+                                disabled={loading || !email || !password || password !== password2}
+                                className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600 disabled:bg-gray-400"
+                                >
+                                Signup
+                            </button>
+                        </div>
                     </div>
                 </div>
-            </div>
+            </form>
         </main>
     );
 
