@@ -36,7 +36,7 @@ export async function POST(req: NextRequest) {
       }
   }
   if (user.length > 0) {
-    return NextResponse.json({ success: false, message: 'This email is already registered with us' });
+    return NextResponse.json({ success: false, message: 'This email is already registered with us', ok: false});
   }
 
 }
