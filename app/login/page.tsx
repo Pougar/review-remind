@@ -30,7 +30,7 @@ export default function Login() {
     };
 
     return (
-      <main className="min-h-screen flex items-center justify-center">
+      <main className="min-h-screen flex flex-col items-center justify-center">
         <Link 
             href="/"
             className="absolute top-4 left-4 bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600 transition"
@@ -38,7 +38,7 @@ export default function Login() {
             Back
         </Link>
         <form onSubmit={handleSubmit}>
-          <div className="relative bg-gray-200 dark:bg-gray-700 rounded-lg shadow-lg w-96 h-64 flex flex-col items-center justify-center">
+          <div className="relative bg-gray-200 dark:bg-gray-700 rounded-lg shadow-lg w-96 h-64 flex flex-col items-center justify-centerm gap 6">
             <h1 className="text-2xl font-semibold text-gray-800 dark:text-gray-100">Log In</h1>
               <input
                 type="email"
