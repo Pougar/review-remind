@@ -6,7 +6,8 @@ const sql = postgres(process.env.DATABASE_URL!, { ssl: 'require' }); // make sur
 
 export async function POST(req: NextRequest) {
   const { email, password } = await req.json();
-  console.log(await req.json());
+  console.log(email);
+  console.log(password);
 
   if (!email || !password) {
     return NextResponse.json({ error: 'Missing email or password' }, { status: 400 });
