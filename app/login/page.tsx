@@ -20,6 +20,7 @@ export default function Login() {
               body: JSON.stringify({ emailValue, passValue }),
             });
             const data = await res.json();
+            console.log(data);
             setMessage(data.message);
           } catch (err) {
             setMessage('An error occurred. Please try again.');
