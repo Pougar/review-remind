@@ -54,14 +54,17 @@ export default function Login() {
                 onChange={(e) => setPassword(e.target.value)}
                 required
               />
-              <button type="submit">Log In</button>
+              <button 
+              type="submit" 
+              disabled={!email || !password}
+              className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600 disabled:bg-gray-400"
+              >
+              Log In
+              </button>
               {error && <p style={{ color: "red" }}>{error}</p>}
             </div>
         </form>
-        <p>
-          Don&apos;t have an account yet?{" "}
-          <Link href="/signup">Click here to sign up</Link>
-        </p>
+          <Link href="/signup" className="hover:underline">Don&apos;t have an account yet?{" "}Click here to sign up.</Link>
 
       </main>
       );
