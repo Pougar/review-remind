@@ -19,6 +19,8 @@ export default function Login() {
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ emailValue, passValue }),
             });
+            console.log(emailValue);
+            console.log(passValue);
             const data = await res.json();
             console.log(data);
             setMessage(data.message);
