@@ -4,15 +4,16 @@ import { useState } from "react";
 import { signIn } from "next-auth/react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { useSession } from "next-auth/react";
 
 export default function Login() {
 
     const [email, setEmail] = useState(""); // state to hold input
     const [password, setPassword] = useState("");
-    const [password2, setPassword2] = useState("");
     const [error, setError] = useState("");
     const [loading, setLoading] = useState(false);
     const router = useRouter();
+    const { data: session, status } = useSession();
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -26,6 +27,9 @@ export default function Login() {
     if (result?.error) {
         setError("Invalid email or password");
         } else {
+        if (session){
+          localStorage.setItem("userId", session.user.id);
+        }
         router.push("/dashboard"); // redirect after successful login
         }
       setLoading(false);
