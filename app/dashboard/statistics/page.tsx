@@ -21,8 +21,12 @@ export default function Stats() {
             if (!res.ok) throw new Error("Failed to fetch review counts");
             const data: ReviewCounts = await res.json();
             setCounts(data);
-          } catch (err: any) {
-            setError(err.message);
+          } catch (err) {
+            if (err instanceof Error) {
+                setError(err.message);
+              } else {
+                setError(String(err));
+              }
           } finally {
             setLoading(false);
           }
