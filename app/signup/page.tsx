@@ -27,10 +27,16 @@ export default function Signup() {
         });
 
         const data = await res.json();
-        setLoading(false);
-    
-        if (!res.ok) {
-          setError(data.error || "Signup failed");
+        console.log(data.message);
+        
+        
+        if (!data.success) {
+          setError(data.message || "Signup failed");
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          if(data.redirect){
+            router.push("/login");
+          }
+          setLoading(false);
           return;
         }
     
@@ -40,7 +46,7 @@ export default function Signup() {
           email,
           password,
         });
-    
+        setLoading(false);
         if (login?.error) {
           setError("Login after signup failed");
         } else {
@@ -56,6 +62,7 @@ export default function Signup() {
                 >
                 Back
             </Link>
+            <div className="flex-col flex items-center justify-center">
             {error && <p style={{ color: "red" }}>{error}</p>}
             {password !== password2 && (<p style={{ color: "red" }}>Passwords do not match</p>)}
             <form onSubmit={handleSubmit}>
@@ -96,6 +103,7 @@ export default function Signup() {
                     </div>
                 </div>
             </form>
+            </div>
             <Link href="/login" className="hover:underline">Already have an account?{" "}Click here to log in</Link>
         </main>
     );
