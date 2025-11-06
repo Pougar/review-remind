@@ -1,4 +1,6 @@
+// app/layout.tsx
 import type { Metadata } from "next";
+import { Suspense } from "react"; // <- add
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 
@@ -24,10 +26,16 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased`}
-      >
-        {children}
+      <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
+        {/* 
+          Server-rendered Suspense boundary:
+          This satisfies Next 15/React 19's requirement that any client hook 
+          reading URL state (useSearchParams/usePathname/useParams) sits under 
+          a Suspense boundary that the server can stream.
+        */}
+        <Suspense fallback={null}>
+          {children}
+        </Suspense>
       </body>
     </html>
   );

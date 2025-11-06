@@ -1,7 +1,7 @@
 // app/admin/page.tsx
 "use client";
 
-import React, { Suspense, useCallback, useMemo, useState } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { API } from "@/app/lib/constants";
 
@@ -9,43 +9,7 @@ export const dynamic = "force-dynamic";
 
 type AdminAuthorizeResponse = { message?: string };
 
-/* Wrap the hook user in Suspense to satisfy Next 15/React 19 */
 export default function AdminGatePage() {
-  return (
-    <Suspense
-      fallback={
-        <main className="relative min-h-screen bg-gradient-to-b from-slate-50 via-white to-white">
-          <div className="pointer-events-none absolute inset-0 overflow-hidden">
-            <div className="absolute -top-24 -right-24 h-64 w-64 rounded-full bg-indigo-200/30 blur-3xl" />
-            <div className="absolute -bottom-24 -left-24 h-64 w-64 rounded-full bg-sky-200/30 blur-3xl" />
-          </div>
-          <div className="relative mx-auto flex min-h-screen max-w-3xl items-center justify-center px-6 py-16">
-            <section className="w-full rounded-3xl border border-slate-200 bg-white/90 p-8 shadow-xl backdrop-blur-md">
-              <div className="mx-auto mb-6 flex w-full max-w-md flex-col items-center text-center">
-                <div className="mb-3 inline-flex h-12 w-12 items-center justify-center rounded-2xl bg-indigo-600 text-white shadow-md">
-                  <LockIcon />
-                </div>
-                <h1 className="text-2xl font-semibold tracking-tight text-slate-900">
-                  Admin access
-                </h1>
-                <p className="mt-2 text-sm leading-6 text-slate-600">
-                  Loading…
-                </p>
-              </div>
-              <div className="mx-auto w-full max-w-md">
-                <div className="h-10 w-full animate-pulse rounded-xl bg-slate-200" />
-              </div>
-            </section>
-          </div>
-        </main>
-      }
-    >
-      <AdminGatePageInner />
-    </Suspense>
-  );
-}
-
-function AdminGatePageInner() {
   const qs = useSearchParams();
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
@@ -55,9 +19,7 @@ function AdminGatePageInner() {
   const nextTarget = useMemo(() => {
     const raw = qs.get("next") || "/";
     try {
-      // Reject absolute URLs or protocol-relative URLs
       if (!raw.startsWith("/") || raw.startsWith("//")) return "/";
-      // Optional: avoid navigating back to /admin itself
       if (raw === "/admin") return "/";
       return raw;
     } catch {
@@ -75,12 +37,11 @@ function AdminGatePageInner() {
         body: JSON.stringify(code ? { code } : {}),
       });
 
-      // Parse JSON safely without `any`
       let j: AdminAuthorizeResponse = {};
       try {
         j = (await r.json()) as unknown as AdminAuthorizeResponse;
       } catch {
-        // non-JSON or empty body; ignore
+        /* ignore non-JSON/empty body */
       }
 
       if (!r.ok) {
@@ -88,11 +49,10 @@ function AdminGatePageInner() {
         return;
       }
 
-      // Success: cookie set server-side; send them to the desired page
+      // Cookie set server-side; navigate
       window.location.assign(nextTarget);
     } catch (e: unknown) {
-      const errMsg = e instanceof Error ? e.message : "Failed to unlock.";
-      setMsg(errMsg);
+      setMsg(e instanceof Error ? e.message : "Failed to unlock.");
     } finally {
       setBusy(false);
     }
