@@ -63,13 +63,14 @@ export default function LinkXeroPage() {
 
       const stage = data.stage as Stage | undefined;
       if (!stage) return;
-
       if (navigatedRef.current) return;
 
       switch (stage) {
         case "link_google":
           navigatedRef.current = true;
-          router.replace(`${ROUTES.DASHBOARD}/${encodeURIComponent(slug)}/add-business/link-google`);
+          router.replace(
+            `${ROUTES.DASHBOARD}/${encodeURIComponent(slug)}/add-business/link-google`
+          );
           return;
 
         case "link-xero":
@@ -79,14 +80,15 @@ export default function LinkXeroPage() {
         case "onboarding":
           navigatedRef.current = true;
           router.replace(
-            `${ROUTES.DASHBOARD}/${encodeURIComponent(slug)}/add-business/business-details?bid=${encodeURIComponent(
+            `${ROUTES.DASHBOARD}/${encodeURIComponent(
+              slug
+            )}/add-business/business-details?bid=${encodeURIComponent(
               businessId
             )}`
           );
           return;
 
         case "already_linked": {
-          // Need business slug to build /dashboard/[slug]/[business_slug]
           try {
             const r = await fetch(API.GET_BUSINESS_SLUG, {
               method: "POST",
@@ -100,11 +102,12 @@ export default function LinkXeroPage() {
             navigatedRef.current = true;
             router.replace(
               bizSlug
-                ? `${ROUTES.DASHBOARD}/${encodeURIComponent(slug)}/${encodeURIComponent(bizSlug)}`
-                : nextDest // fallback if slug missing
+                ? `${ROUTES.DASHBOARD}/${encodeURIComponent(
+                    slug
+                  )}/${encodeURIComponent(bizSlug)}`
+                : nextDest
             );
           } catch {
-            // fallback
             navigatedRef.current = true;
             router.replace(nextDest);
           }
@@ -112,7 +115,11 @@ export default function LinkXeroPage() {
         }
       }
     } catch (e: unknown) {
-      setStatusMsg(e instanceof Error ? e.message : "Could not check onboarding stage.");
+      setStatusMsg(
+        e instanceof Error
+          ? e.message
+          : "Could not check onboarding stage."
+      );
     }
   }, [businessId, router, slug, nextDest]);
 
@@ -122,7 +129,6 @@ export default function LinkXeroPage() {
     setChecking(true);
     setStatusMsg("Checking Xero connection…");
     try {
-      // Your has-connection endpoint is POST and expects { userId, businessId }
       const res = await fetch(API.XERO_HAS_CONNECTION, {
         method: "POST",
         credentials: "include",
@@ -143,16 +149,26 @@ export default function LinkXeroPage() {
       if (res.ok) {
         setStatusMsg(
           connected
-            ? `Xero connected ✓ ${tenantCount ? `(${tenantCount} org${tenantCount > 1 ? "s" : ""})` : ""}`
+            ? `Xero connected ✓ ${
+                tenantCount
+                  ? `(${tenantCount} org${tenantCount > 1 ? "s" : ""})`
+                  : ""
+              }`
             : "Not connected to Xero yet."
         );
       } else {
-        setStatusMsg(data?.error || "Could not verify Xero connection.");
+        setStatusMsg(
+          data?.error || "Could not verify Xero connection."
+        );
       }
 
       return { connected, tenantCount };
     } catch (e: unknown) {
-      setStatusMsg(e instanceof Error ? e.message : "Could not verify Xero connection.");
+      setStatusMsg(
+        e instanceof Error
+          ? e.message
+          : "Could not verify Xero connection."
+      );
       return { connected: false, tenantCount: 0 };
     } finally {
       setChecking(false);
@@ -168,7 +184,11 @@ export default function LinkXeroPage() {
       const here =
         typeof window !== "undefined"
           ? window.location.pathname + window.location.search
-          : `/dashboard/${encodeURIComponent(slug)}/add-business/link-xero?bid=${encodeURIComponent(businessId || "")}`;
+          : `/dashboard/${encodeURIComponent(
+              slug
+            )}/add-business/link-xero?bid=${encodeURIComponent(
+              businessId || ""
+            )}`;
       router.replace(`${ROUTES.LOG_IN}?next=${encodeURIComponent(here)}`);
       return;
     }
@@ -178,24 +198,32 @@ export default function LinkXeroPage() {
       return;
     }
 
-    // Stage check may move us away; if we stay, we’re on the correct step
     void (async () => {
       await checkStageAndRoute();
       if (!navigatedRef.current) {
-        // We remained here (stage is link-xero) — show current connection status
         void checkConnection();
       }
     })();
-  }, [isPending, userId, businessId, slug, checkStageAndRoute, checkConnection, router]);
+  }, [
+    isPending,
+    userId,
+    businessId,
+    slug,
+    checkStageAndRoute,
+    checkConnection,
+    router,
+  ]);
 
-  // Kick off Xero flow
+  // Kick off Xero flow in a NEW TAB only
   const onConnect = useCallback(async () => {
     if (!userId || !isUUID(businessId)) return;
     setStatusMsg("");
     setConnectDisabled(true);
+
     try {
-      // After success, we want to land on business-details with the bid intact
-      const callback = `/dashboard/${encodeURIComponent(slug)}/add-business/business-details?bid=${encodeURIComponent(
+      const callback = `/dashboard/${encodeURIComponent(
+        slug
+      )}/add-business/business-details?bid=${encodeURIComponent(
         businessId
       )}`;
 
@@ -203,46 +231,76 @@ export default function LinkXeroPage() {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          userId,     // BetterAuth user id
-          businessId, // the business we’re connecting Xero to
-          callback,   // where the receiver should redirect after success
+          userId,
+          businessId,
+          callback,
         }),
       });
 
       if (!res.ok) {
         const msg = await res.text().catch(() => "");
-        throw new Error(msg || "Failed to start Xero connect");
+        throw new Error(msg || "Failed to start Xero connect.");
       }
 
-      const { authorizeUrl } = (await res.json().catch(() => ({}))) as { authorizeUrl?: string };
-      if (!authorizeUrl) throw new Error("Missing authorize URL from server.");
+      const { authorizeUrl } = (await res
+        .json()
+        .catch(() => ({}))) as { authorizeUrl?: string };
 
-      // Open with noopener directly — avoids needing ts-ignores and is safer.
-      const tab = window.open(authorizeUrl, "_blank", "noopener,noreferrer");
-      if (!tab) {
-        // fallback if popup blocked
-        window.location.href = authorizeUrl;
+      if (!authorizeUrl) {
+        throw new Error("Missing authorize URL from server.");
+      }
+
+      // Open ONLY in a new tab. Do NOT auto-redirect this tab.
+      const newTab = window.open(authorizeUrl, "_blank");
+
+      if (newTab) {
+        // Ensure no reference back for security; avoids noopener/null issues.
+        newTab.opener = null;
+        setStatusMsg(
+          "Xero connection page opened in a new tab. Once you've connected, return here and click Recheck."
+        );
+      } else {
+        // Popup blocked: we DON'T hijack this tab; we just give the URL.
+        setStatusMsg(
+          "Popup was blocked. Please allow pop-ups for this site and try again, or open this link manually: " +
+            authorizeUrl
+        );
       }
     } catch (e: unknown) {
-      setStatusMsg(e instanceof Error ? e.message : "Failed to start Xero connect.");
+      setStatusMsg(
+        e instanceof Error
+          ? e.message
+          : "Failed to start Xero connect."
+      );
     } finally {
       setConnectDisabled(false);
     }
   }, [userId, businessId, slug]);
 
-  const disabled = isPending || !userId || !isUUID(businessId) || connectDisabled || checking;
+  const disabled =
+    isPending ||
+    !userId ||
+    !isUUID(businessId) ||
+    connectDisabled ||
+    checking;
 
   return (
     <div className="text-slate-900">
       <div className="mx-auto w-full max-w-3xl px-6 py-12">
         {/* Title & subtitle */}
-        <h1 className="text-2xl sm:text-3xl font-semibold tracking-tight">Link your Xero account</h1>
+        <h1 className="text-2xl sm:text-3xl font-semibold tracking-tight">
+          Link your Xero account
+        </h1>
         <p className="mt-2 text-sm text-slate-600">
-          Connect your Xero organisation so we can securely fetch invoices and keep your client list in sync.
+          Connect your Xero organisation so we can securely fetch invoices and
+          keep your client list in sync.
         </p>
 
         {/* Status */}
-        <div className="mt-4 min-h-[1.25rem] text-sm" aria-live="polite">
+        <div
+          className="mt-4 min-h-[1.25rem] text-sm"
+          aria-live="polite"
+        >
           {statusMsg}
         </div>
 
@@ -253,8 +311,11 @@ export default function LinkXeroPage() {
             onClick={onConnect}
             disabled={disabled}
             aria-disabled={disabled}
-            className={`inline-flex items-center justify-center rounded-lg px-5 py-3 text-sm font-semibold transition
-              ${disabled ? "bg-slate-200 text-slate-500 cursor-not-allowed" : "bg-blue-600 text-white hover:bg-blue-700"}`}
+            className={`inline-flex items-center justify-center rounded-lg px-5 py-3 text-sm font-semibold transition ${
+              disabled
+                ? "bg-slate-200 text-slate-500 cursor-not-allowed"
+                : "bg-blue-600 text-white hover:bg-blue-700"
+            }`}
           >
             Connect to Xero
           </button>
@@ -265,7 +326,9 @@ export default function LinkXeroPage() {
               onClick={() => void checkConnection()}
               disabled={disabled}
               className={`underline-offset-2 hover:underline ${
-                disabled ? "text-slate-400 cursor-not-allowed" : "text-slate-700"
+                disabled
+                  ? "text-slate-400 cursor-not-allowed"
+                  : "text-slate-700"
               }`}
             >
               {checking ? "Checking…" : "Recheck"}
@@ -273,15 +336,20 @@ export default function LinkXeroPage() {
 
             <button
               type="button"
-              onClick={() => router.push(`${ROUTES.DASHBOARD}/${encodeURIComponent(slug)}`)}
+              onClick={() =>
+                router.push(
+                  `${ROUTES.DASHBOARD}/${encodeURIComponent(slug)}`
+                )
+              }
               className="text-slate-700 underline-offset-4 hover:underline"
             >
               Back to dashboard
             </button>
           </div>
 
-        <p className="pt-2 text-xs text-slate-500">
-            You can revoke access at any time in Xero. We only read invoice metadata needed for your workflow.
+          <p className="pt-2 text-xs text-slate-500">
+            You can revoke access at any time in Xero. We only read invoice
+            metadata needed for your workflow.
           </p>
         </div>
       </div>
