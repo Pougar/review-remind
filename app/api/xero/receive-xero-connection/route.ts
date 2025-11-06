@@ -25,13 +25,19 @@ type XeroConnection = {
   tenantName: string;
 };
 
+/* ---------- PG Pool (singleton across HMR) ---------- */
+declare global {
+  // eslint-disable-next-line no-var
+  var __pgPoolXeroReceive: Pool | undefined;
+}
+
 const pool =
-  (globalThis as any).__pgPool ??
+  globalThis.__pgPoolXeroReceive ??
   new Pool({
     connectionString: process.env.DATABASE_URL,
     ssl: { rejectUnauthorized: true },
   });
-(globalThis as any).__pgPool = pool;
+globalThis.__pgPoolXeroReceive = pool;
 
 function requireEnv(name: string) {
   const v = process.env[name];
@@ -39,7 +45,7 @@ function requireEnv(name: string) {
   return v;
 }
 
-function fromB64Url<T = any>(val: string): T {
+function fromB64Url<T = unknown>(val: string): T {
   return JSON.parse(Buffer.from(val, "base64url").toString("utf8")) as T;
 }
 
@@ -69,7 +75,7 @@ export async function GET(req: NextRequest) {
 
     let decoded: { userId?: string; businessId?: string; nonce?: string; returnTo?: string };
     try {
-      decoded = fromB64Url(state);
+      decoded = fromB64Url<{ userId?: string; businessId?: string; nonce?: string; returnTo?: string }>(state);
     } catch {
       return NextResponse.json({ error: "Invalid state" }, { status: 400 });
     }
@@ -232,11 +238,12 @@ export async function GET(req: NextRequest) {
     });
     res.headers.set("cache-control", "no-store");
     return res;
-  } catch (err: any) {
+  } catch (err: unknown) {
     try {
       await pool.query("ROLLBACK");
     } catch {}
-    console.error("[/api/xero/receive-xero-connection] error:", err?.stack || err);
+    const e = err instanceof Error ? err : new Error(String(err));
+    console.error("[/api/xero/receive-xero-connection] error:", e.stack ?? e);
     return NextResponse.json({ error: "Server error" }, { status: 500 });
   } finally {
     client.release();

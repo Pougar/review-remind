@@ -8,24 +8,20 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /* ========= PG Pool (singleton across hot reloads) ========= */
-declare global {
-  // eslint-disable-next-line no-var
-  var _pgPoolEmailTemplateSave: Pool | undefined;
-}
+const globalForPg = globalThis as unknown as { _pgPoolEmailTemplateSave?: Pool };
 
 function getPool(): Pool {
-  if (!global._pgPoolEmailTemplateSave) {
+  if (!globalForPg._pgPoolEmailTemplateSave) {
     const cs = process.env.DATABASE_URL;
     if (!cs) throw new Error("DATABASE_URL is not set");
-
-    global._pgPoolEmailTemplateSave = new Pool({
+    globalForPg._pgPoolEmailTemplateSave = new Pool({
       connectionString: cs,
       // Neon/hosted PG often needs SSL; `rejectUnauthorized: false` is common
       ssl: { rejectUnauthorized: false },
       max: 5,
     });
   }
-  return global._pgPoolEmailTemplateSave;
+  return globalForPg._pgPoolEmailTemplateSave;
 }
 
 /* ========= Helpers ========= */
@@ -47,7 +43,7 @@ export async function POST(req: NextRequest) {
 
   try {
     /* ---------- Auth (BetterAuth session) ---------- */
-    const session = await auth.api.getSession({ headers: req.headers as any });
+    const session = await auth.api.getSession({ headers: req.headers });
     const userId = session?.user?.id;
     if (!userId) {
       return NextResponse.json({ error: "UNAUTHORIZED" }, { status: 401 });
@@ -61,19 +57,14 @@ export async function POST(req: NextRequest) {
 
     if (!isUUID(businessId)) {
       return NextResponse.json(
-        {
-          error: "INVALID_INPUT",
-          message: "Valid businessId (uuid) is required.",
-        },
+        { error: "INVALID_INPUT", message: "Valid businessId (uuid) is required." },
         { status: 400 }
       );
     }
 
     // Trim + cap lengths
     const subject =
-      typeof rawSubject === "string"
-        ? capLen(rawSubject.trim(), MAX_SUBJECT)
-        : "";
+      typeof rawSubject === "string" ? capLen(rawSubject.trim(), MAX_SUBJECT) : "";
     const templateBody =
       typeof rawBody === "string" ? capLen(rawBody.trim(), MAX_BODY) : "";
 
@@ -121,12 +112,8 @@ export async function POST(req: NextRequest) {
       [businessId, subject, templateBody]
     );
 
-    // If RLS prevented access to that business row, rowCount could be 0
     if (q.rowCount === 0) {
-      return NextResponse.json(
-        { error: "NOT_ALLOWED_OR_NOT_FOUND" },
-        { status: 403 }
-      );
+      return NextResponse.json({ error: "NOT_ALLOWED_OR_NOT_FOUND" }, { status: 403 });
     }
 
     const row = q.rows[0];
@@ -142,24 +129,17 @@ export async function POST(req: NextRequest) {
       },
       { status: 200 }
     );
-  } catch (err: any) {
-    const msg = String(err?.message || "");
-
-    // Nice hint if RLS blocked it
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
     if (msg.toLowerCase().includes("row-level security")) {
       return NextResponse.json(
-        {
-          error: "RLS_DENIED",
-          message: "Permission denied by row-level security.",
-        },
+        { error: "RLS_DENIED", message: "Permission denied by row-level security." },
         { status: 403 }
       );
     }
 
-    console.error(
-      "[/api/email-settings/save-template] error:",
-      err?.stack || err
-    );
+    const log = err instanceof Error ? err.stack || err.message : String(err);
+    console.error("[/api/email-settings/save-template] error:", log);
     return NextResponse.json(
       { error: "SERVER_ERROR", message: "Failed to save template." },
       { status: 500 }

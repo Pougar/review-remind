@@ -7,22 +7,20 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /** ---------- PG Pool (singleton across hot reloads) ---------- */
-declare global {
-  // eslint-disable-next-line no-var
-  var _pgPoolSyncGoogle: Pool | undefined;
-}
+// Use a typed global cache instead of declare global + eslint-disable
+const globalForPg = globalThis as unknown as { _pgPoolSyncGoogle?: Pool };
 function getPool(): Pool {
-  if (!global._pgPoolSyncGoogle) {
+  if (!globalForPg._pgPoolSyncGoogle) {
     const cs = process.env.DATABASE_URL;
     if (!cs) throw new Error("DATABASE_URL is not set");
-    global._pgPoolSyncGoogle = new Pool({
+    globalForPg._pgPoolSyncGoogle = new Pool({
       connectionString: cs,
       // Neon typically => SSL on; rejectUnauthorized=false plays nicely unless your URL has sslmode=require
       ssl: { rejectUnauthorized: false },
       max: 5,
     });
   }
-  return global._pgPoolSyncGoogle;
+  return globalForPg._pgPoolSyncGoogle;
 }
 
 /* ---------------- helpers ---------------- */
@@ -60,7 +58,7 @@ export async function POST(req: NextRequest) {
     }
 
     await client.query("BEGIN");
-    // Use set_config(..., is_local=true) so it resets at tx end; parameters can't be used with SET
+    // Use set_config(..., is_local=true) so it resets at tx end
     await client.query(`SELECT set_config('app.user_id', $1, true)`, [userId]);
 
     // 1) Find unlinked Google reviews for this business and match to clients by name (case-insensitive)
@@ -93,7 +91,7 @@ export async function POST(req: NextRequest) {
       [businessId]
     );
 
-    let matched = matches.length;
+    const matched = matches.length; // prefer-const ✅
     let inserted = 0;
     let updatedExisting = 0;
     let clientsSentimentUpdated = 0;
@@ -106,7 +104,7 @@ export async function POST(req: NextRequest) {
       const gStars = m.g_stars;
       const clientId = m.client_id;
 
-      // Fetch the most recent review row for this client (no user_id in new schema)
+      // Fetch the most recent review row for this client
       const { rows: revRows } = await client.query<{
         id: string;
         review: string | null;
@@ -147,7 +145,6 @@ export async function POST(req: NextRequest) {
         );
         if (res.rowCount) updatedExisting++;
 
-        // If client was unreviewed and we now have stars, infer sentiment
         if (m.client_sentiment === "unreviewed" && gStars != null) {
           const sres = await client.query(
             `
@@ -213,9 +210,11 @@ export async function POST(req: NextRequest) {
       },
       { status: 200 }
     );
-  } catch (err: any) {
+  } catch (err: unknown) {
     try { await client.query("ROLLBACK"); } catch {}
-    console.error("[/api/clients/sync-with-google-reviews] error:", err?.stack || err);
+    const logMsg =
+      err instanceof Error ? err.stack || err.message : String(err);
+    console.error("[/api/clients/sync-with-google-reviews] error:", logMsg);
     return NextResponse.json({ error: "SERVER_ERROR" }, { status: 500 });
   } finally {
     client.release();

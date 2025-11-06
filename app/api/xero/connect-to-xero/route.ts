@@ -89,8 +89,9 @@ export async function POST(req: NextRequest) {
     });
     res.headers.set("cache-control", "no-store");
     return res;
-  } catch (err: any) {
-    console.error("[/api/xero/connect-to-xero] error:", err?.stack || err);
+  } catch (err: unknown) {
+    const e = err instanceof Error ? err : new Error(String(err));
+    console.error("[/api/xero/connect-to-xero] error:", e.stack ?? e);
     return NextResponse.json({ error: "Server error" }, { status: 500 });
   }
 }

@@ -6,24 +6,20 @@ import { auth } from "@/app/lib/auth";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-/** ---------- PG Pool (singleton across hot reloads) ---------- */
-declare global {
-  // eslint-disable-next-line no-var
-  var _pgPoolUpdateBizDesc: Pool | undefined;
-}
+/** ---------- PG Pool (singleton across hot reloads; no eslint-disable, no `any`) ---------- */
+const globalForPg = globalThis as unknown as { _pgPoolUpdateBizDesc?: Pool };
 function getPool(): Pool {
-  if (!global._pgPoolUpdateBizDesc) {
+  if (!globalForPg._pgPoolUpdateBizDesc) {
     const cs = process.env.DATABASE_URL;
     if (!cs) throw new Error("DATABASE_URL is not set");
-    global._pgPoolUpdateBizDesc = new Pool({
+    globalForPg._pgPoolUpdateBizDesc = new Pool({
       connectionString: cs,
-      // Neon typically requires SSL; set to false if your connection string
-      // already includes sslmode=require.
+      // Neon typically requires SSL; set to false if your connection string includes sslmode=require.
       ssl: { rejectUnauthorized: false },
       max: 5,
     });
   }
-  return global._pgPoolUpdateBizDesc;
+  return globalForPg._pgPoolUpdateBizDesc;
 }
 
 const MAX_LEN = 4000;
@@ -34,12 +30,22 @@ type ReqBody = {
   description?: string | null;
 };
 
+async function readJson<T>(req: NextRequest): Promise<T | null> {
+  try {
+    return (await req.json()) as unknown as T;
+  } catch {
+    return null;
+  }
+}
+
 export async function POST(req: NextRequest) {
   const pool = getPool();
   const client = await pool.connect();
 
   try {
-    const { businessId, description } = (await req.json().catch(() => ({}))) as ReqBody;
+    const body = (await readJson<ReqBody>(req)) ?? {};
+    const businessId = (body.businessId ?? "").trim();
+    const description = body.description;
 
     if (!isUUID(businessId)) {
       return NextResponse.json(
@@ -84,9 +90,13 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    return NextResponse.json({ success: true, business: rows[0] }, { status: 200 });
-  } catch (err) {
-    console.error("[update-business-description] error:", (err as any)?.stack || err);
+    return NextResponse.json(
+      { success: true, business: rows[0] },
+      { status: 200, headers: { "Cache-Control": "no-store" } }
+    );
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.stack ?? err.message : String(err);
+    console.error("[update-business-description] error:", msg);
     return NextResponse.json({ error: "INTERNAL" }, { status: 500 });
   } finally {
     client.release();

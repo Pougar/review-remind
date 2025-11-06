@@ -3,7 +3,6 @@
 import Link from "next/link";
 import { useMemo, useState, useCallback, useEffect } from "react";
 import { ROUTES } from "@/app/lib/constants";
-import FeatureGrid from "@/app/ui/landing/FeatureGrid";
 import FeatureCarousel from "@/app/ui/landing/FeatureCarousel";
 import {
   ResponsiveContainer,

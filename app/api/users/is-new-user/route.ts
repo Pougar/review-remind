@@ -4,7 +4,6 @@ import { Pool } from "pg";
 
 /** ---------- PG Pool (singleton across hot reloads) ---------- */
 declare global {
-  // eslint-disable-next-line no-var
   var _pgPool: Pool | undefined;
 }
 
@@ -80,8 +79,9 @@ export async function POST(req: NextRequest) {
     } finally {
       client.release();
     }
-  } catch (err: any) {
-    console.error("[/api/dashboard/check-new-user] error:", err?.stack || err);
+  } catch (err: unknown) {
+    const e = err instanceof Error ? err : new Error(String(err));
+    console.error("[/api/dashboard/check-new-user] error:", e.stack ?? e);
     return NextResponse.json({ error: "SERVER_ERROR" }, { status: 500 });
   }
 }

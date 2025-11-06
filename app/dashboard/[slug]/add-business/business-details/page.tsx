@@ -22,7 +22,39 @@ function slugify(input: string, maxLen = 60): string {
 /* ---------- Stage type & API fallbacks ---------- */
 type Stage = "link_google" | "link-xero" | "onboarding" | "already_linked";
 const GET_BUSINESS_STAGE_API = API.CHECK_BUSINESS_STAGE;
-const GET_BUSINESS_SLUG_API  = API.GET_BUSINESS_SLUG;
+const GET_BUSINESS_SLUG_API = API.GET_BUSINESS_SLUG;
+
+/* ---------- Typed API payloads ---------- */
+type StageCheckResp = {
+  stage?: Stage;
+  error?: string;
+  message?: string;
+};
+
+type BusinessDetailsResp = {
+  display_name?: string | null;
+  business_email?: string | null;
+  description?: string | null;
+  google_review_link?: string | null;
+  slug?: string | null;
+  error?: string;
+  message?: string;
+};
+
+type SaveDetailsResp = {
+  slug?: string | null;
+  message?: string;
+  error?: string;
+};
+
+/* Typed JSON helper to avoid implicit any from Response.json() */
+async function safeJson<T>(res: Response): Promise<T> {
+  try {
+    return (await res.json()) as T;
+  } catch {
+    return {} as T;
+  }
+}
 
 export default function BusinessDetailsPage() {
   const router = useRouter();
@@ -31,7 +63,9 @@ export default function BusinessDetailsPage() {
 
   // USER slug (owner’s slug in URL)
   const userSlug = useMemo(
-    () => (Array.isArray(params?.slug) ? params!.slug[0] : (params?.slug as string)) || "",
+    () =>
+      (Array.isArray(params?.slug) ? (params!.slug[0] as string) : (params?.slug as string)) ||
+      "",
     [params]
   );
 
@@ -61,12 +95,7 @@ export default function BusinessDetailsPage() {
   // derived helpers
   const prettySlug = slugify(slugInput);
   const emailValid = !businessEmail || /.+@.+\..+/.test(businessEmail.trim());
-  const canSave =
-    !!userId &&
-    !!businessId &&
-    !!displayName.trim() &&
-    emailValid &&
-    !saving;
+  const canSave = !!userId && !!businessId && !!displayName.trim() && emailValid && !saving;
 
   /* ---------- stage check & routing ---------- */
   useEffect(() => {
@@ -77,7 +106,9 @@ export default function BusinessDetailsPage() {
       const here =
         typeof window !== "undefined"
           ? window.location.pathname + window.location.search
-          : `/dashboard/${encodeURIComponent(userSlug)}/add-business/business-details?bid=${encodeURIComponent(businessId || "")}`;
+          : `/dashboard/${encodeURIComponent(
+              userSlug
+            )}/add-business/business-details?bid=${encodeURIComponent(businessId || "")}`;
       router.replace(`${ROUTES.LOG_IN}?next=${encodeURIComponent(here)}`);
       return;
     }
@@ -92,7 +123,6 @@ export default function BusinessDetailsPage() {
     let alive = true;
     (async () => {
       try {
-        console.log("userID:", userId, " businessId:", businessId);
         setLoading(true);
         // POST { businessId } → { stage: "link_google" | "link-xero" | "onboarding" | "already_linked" }
         const res = await fetch(GET_BUSINESS_STAGE_API, {
@@ -102,18 +132,18 @@ export default function BusinessDetailsPage() {
           cache: "no-store",
           body: JSON.stringify({ businessId, userId }),
         });
-        const data = (await res.json().catch(() => ({}))) as { stage?: Stage; error?: string };
 
+        const data = await safeJson<StageCheckResp>(res);
         if (!alive) return;
 
         if (!res.ok) {
-          setMsg(data?.error || "Could not verify onboarding stage.");
+          setMsg(data?.error || data?.message || "Could not verify onboarding stage.");
           setIsError(true);
           setLoading(false);
           return;
         }
 
-        const stage = data?.stage as Stage | undefined;
+        const stage = data?.stage;
         if (!stage || stage === "onboarding") {
           // Stay on this page and load details
           setAllowLoad(true);
@@ -121,12 +151,16 @@ export default function BusinessDetailsPage() {
         }
 
         if (stage === "link_google") {
-          router.replace(`${ROUTES.DASHBOARD}/${encodeURIComponent(userSlug)}/add-business/link-google`);
+          router.replace(
+            `${ROUTES.DASHBOARD}/${encodeURIComponent(userSlug)}/add-business/link-google`
+          );
           return;
         }
         if (stage === "link-xero") {
           router.replace(
-            `${ROUTES.DASHBOARD}/${encodeURIComponent(userSlug)}/add-business/link-xero?bid=${encodeURIComponent(businessId)}`
+            `${ROUTES.DASHBOARD}/${encodeURIComponent(
+              userSlug
+            )}/add-business/link-xero?bid=${encodeURIComponent(businessId)}`
           );
           return;
         }
@@ -140,11 +174,13 @@ export default function BusinessDetailsPage() {
               cache: "no-store",
               body: JSON.stringify({ businessId }),
             });
-            const j = (await r.json().catch(() => ({}))) as { slug?: string };
+            const j = await safeJson<{ slug?: string }>(r);
             const bizSlug = j?.slug;
             router.replace(
               bizSlug
-                ? `${ROUTES.DASHBOARD}/${encodeURIComponent(userSlug)}/${encodeURIComponent(bizSlug)}`
+                ? `${ROUTES.DASHBOARD}/${encodeURIComponent(userSlug)}/${encodeURIComponent(
+                    bizSlug
+                  )}`
                 : `${ROUTES.DASHBOARD}/${encodeURIComponent(userSlug)}`
             );
           } catch {
@@ -152,9 +188,10 @@ export default function BusinessDetailsPage() {
           }
           return;
         }
-      } catch (e: any) {
+      } catch (e: unknown) {
         if (!alive) return;
-        setMsg(e?.message || "Failed to verify onboarding stage.");
+        const message = e instanceof Error ? e.message : "Failed to verify onboarding stage.";
+        setMsg(message);
         setIsError(true);
       } finally {
         if (alive) setLoading(false);
@@ -185,7 +222,7 @@ export default function BusinessDetailsPage() {
           body: JSON.stringify({ businessId }),
         });
 
-        const data = await res.json().catch(() => ({} as any));
+        const data = await safeJson<BusinessDetailsResp>(res);
         if (!alive) return;
 
         if (!res.ok) {
@@ -198,9 +235,11 @@ export default function BusinessDetailsPage() {
           setGoogleReviewLink(data?.google_review_link ?? "");
           setSlugInput(data?.slug ?? "");
         }
-      } catch (e: any) {
+      } catch (e: unknown) {
         if (!alive) return;
-        setMsg(e?.message || "Network error loading business details.");
+        const message =
+          e instanceof Error ? e.message : "Network error loading business details.";
+        setMsg(message);
         setIsError(true);
       } finally {
         if (alive) setLoading(false);
@@ -228,8 +267,8 @@ export default function BusinessDetailsPage() {
         credentials: "include",
         cache: "no-store",
         body: JSON.stringify({
-          userId,              // from session
-          businessId,          // from ?bid
+          userId, // from session
+          businessId, // from ?bid
           displayName: displayName.trim(),
           businessEmail: businessEmail.trim() || null,
           description: description.trim() || null,
@@ -238,7 +277,7 @@ export default function BusinessDetailsPage() {
         }),
       });
 
-      const saveJson = await saveRes.json().catch(() => ({} as any));
+      const saveJson = await safeJson<SaveDetailsResp>(saveRes);
       if (!saveRes.ok) {
         setMsg(saveJson?.message || saveJson?.error || "Could not save changes.");
         setIsError(true);
@@ -246,7 +285,7 @@ export default function BusinessDetailsPage() {
         return;
       }
 
-      const finalSlug: string = saveJson?.slug || slugify(slugInput) || "";
+      const finalSlug: string = (saveJson?.slug || slugify(slugInput) || "") ?? "";
       if (!finalSlug) {
         setMsg("Saved, but could not resolve business URL.");
         setIsError(true);
@@ -273,9 +312,12 @@ export default function BusinessDetailsPage() {
       }
 
       // 3) Redirect to the business dashboard
-      router.replace(`${ROUTES.DASHBOARD}/${encodeURIComponent(userSlug)}/${encodeURIComponent(finalSlug)}`);
-    } catch (e: any) {
-      setMsg(e?.message || "Unexpected error saving settings.");
+      router.replace(
+        `${ROUTES.DASHBOARD}/${encodeURIComponent(userSlug)}/${encodeURIComponent(finalSlug)}`
+      );
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : "Unexpected error saving settings.";
+      setMsg(message);
       setIsError(true);
     } finally {
       setSaving(false);
@@ -295,11 +337,7 @@ export default function BusinessDetailsPage() {
 
   /* ---------- auth / loading guards ---------- */
   if (isPending || loading) {
-    return (
-      <div className="min-h-screen grid place-items-center bg-white text-slate-700">
-        Loading…
-      </div>
-    );
+    return <div className="min-h-screen grid place-items-center bg-white text-slate-700">Loading…</div>;
   }
 
   if (!userId || !businessId) {

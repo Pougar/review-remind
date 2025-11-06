@@ -1,22 +1,21 @@
 // app/api/businesses/save-details/route.ts
 import "server-only";
 import { NextRequest, NextResponse } from "next/server";
-import { Pool } from "pg";
-import type { Pool as PgPool, PoolClient, QueryResult } from "pg";
+import { Pool, type PoolClient, type QueryResult } from "pg";
 
 /* ========= Runtime / DB ========= */
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-/** Reuse a typed Pool across hot-reloads */
-const existingPool = (globalThis as any).__pgPool as PgPool | undefined;
-const pool: PgPool =
-  existingPool ??
+/** Reuse a typed Pool across hot-reloads (no `any`) */
+const globalForPg = globalThis as unknown as { __pgPool?: Pool };
+const pool =
+  globalForPg.__pgPool ??
   new Pool({
     connectionString: process.env.DATABASE_URL,
     ssl: { rejectUnauthorized: true },
   });
-(globalThis as any).__pgPool = pool;
+globalForPg.__pgPool = pool;
 
 /* ========= Helpers ========= */
 const isNonEmpty = (v?: string | null) => !!v && v.trim().length > 0;
@@ -48,13 +47,21 @@ const ERR = {
   INTERNAL:  { error: "INTERNAL", message: "Could not save business details." },
 } as const;
 
+async function readJson<T>(req: NextRequest): Promise<T | null> {
+  try {
+    return (await req.json()) as unknown as T;
+  } catch {
+    return null;
+  }
+}
+
 /* ========= POST /api/businesses/save-details =========
    Saves any subset of {displayName, businessEmail, description, googleReviewLink, slug}.
    - Requires { userId, businessId } for RLS.
    - If slug is provided and not unique/invalid, other fields are saved and a warning is returned.
 */
 export async function POST(req: NextRequest) {
-  const body = (await req.json().catch(() => ({}))) as Body;
+  const body = (await readJson<Body>(req)) ?? {};
 
   const userId = body.userId?.trim();
   const businessId = body.businessId?.trim();
@@ -63,9 +70,6 @@ export async function POST(req: NextRequest) {
   if (!isNonEmpty(userId) || !isNonEmpty(businessId)) {
     return NextResponse.json(ERR.BAD_INPUT, { status: 400 });
   }
-
-  // Log for debugging
-  console.log("[/api/businesses/save-details] userId:", userId, "businessId:", businessId);
 
   // normalize non-slug inputs (allow explicit null to clear; empty string → null)
   const displayName =
@@ -82,7 +86,6 @@ export async function POST(req: NextRequest) {
   const wantSlugClean =
     wantSlugRaw === undefined ? undefined : slugify(String(wantSlugRaw));
 
-  // 🔧 Type the client so generics on query are allowed
   const client: PoolClient = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -128,10 +131,10 @@ export async function POST(req: NextRequest) {
 
     // Build dynamic UPDATE only with provided fields
     const sets: string[] = [];
-    const vals: any[] = [];
+    const vals: Array<string | null> = []; // no `any`
     let idx = 1;
 
-    const push = (col: string, val: any) => {
+    const push = (col: string, val: string | null) => {
       sets.push(`${col} = $${idx++}`);
       vals.push(val);
     };
@@ -161,10 +164,9 @@ export async function POST(req: NextRequest) {
     }
 
     const sql = `UPDATE public.businesses SET ${sets.join(", ")} WHERE id = $${idx} RETURNING id, slug`;
-    vals.push(businessId);
-
+    const params: unknown[] = [...vals, businessId]; // keep typesafe; pg accepts unknown[] for values
     const upd: QueryResult<{ id: string; slug: string }> =
-      await client.query<{ id: string; slug: string }>(sql, vals);
+      await client.query<{ id: string; slug: string }>(sql, params);
 
     await client.query("COMMIT");
 
@@ -186,9 +188,10 @@ export async function POST(req: NextRequest) {
       },
       { headers: { "Cache-Control": "no-store" } }
     );
-  } catch (e) {
-    try { await client.query("ROLLBACK"); } catch {}
-    console.error("[/api/businesses/save-details] failed:", e);
+  } catch (e: unknown) {
+    try { await client.query("ROLLBACK"); } catch { /* ignore */ }
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error("[/api/businesses/save-details] failed:", msg);
     return NextResponse.json(ERR.INTERNAL, { status: 500 });
   } finally {
     client.release();

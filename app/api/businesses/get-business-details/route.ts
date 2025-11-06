@@ -1,20 +1,21 @@
 // app/api/businesses/get-business-details/route.ts
 import "server-only";
 import { NextRequest, NextResponse } from "next/server";
-import { Pool } from "pg";
+import { Pool, PoolClient } from "pg";
 import { auth } from "@/app/lib/auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-// Reuse pool across HMR
+/** ---------- Reuse pool across HMR (no `any`) ---------- */
+const globalForPg = globalThis as unknown as { __pgPool?: Pool };
 const pool =
-  (globalThis as any).__pgPool ??
+  globalForPg.__pgPool ??
   new Pool({
     connectionString: process.env.DATABASE_URL,
     ssl: { rejectUnauthorized: true },
   });
-(globalThis as any).__pgPool = pool;
+globalForPg.__pgPool = pool;
 
 const isNonEmpty = (v?: string | null) => !!v && v.trim().length > 0;
 
@@ -30,6 +31,28 @@ const SQL_GET_BUSINESS = `
   WHERE id = $1 AND deleted_at IS NULL
   LIMIT 1
 ` as const;
+
+type BusinessRow = {
+  id: string;
+  slug: string;
+  display_name: string | null;
+  business_email: string | null;
+  description: string | null;
+  google_review_link: string | null;
+};
+
+type Body = {
+  businessId?: string;
+  userId?: string; // optional: can bypass session lookup
+};
+
+async function readJson<T>(req: NextRequest): Promise<T | null> {
+  try {
+    return (await req.json()) as unknown as T;
+  } catch {
+    return null;
+  }
+}
 
 // Shared handler so we can support both POST and GET
 async function handle(req: NextRequest, businessId?: string, userIdFromBody?: string) {
@@ -48,7 +71,7 @@ async function handle(req: NextRequest, businessId?: string, userIdFromBody?: st
       const session = await auth.api.getSession({ headers: req.headers });
       userId = session?.user?.id ?? "";
     } catch {
-      // ignore
+      /* ignore */
     }
   }
   if (!isNonEmpty(userId)) {
@@ -58,13 +81,14 @@ async function handle(req: NextRequest, businessId?: string, userIdFromBody?: st
     );
   }
 
-  const client = await pool.connect();
+  let client: PoolClient | null = null;
   try {
+    client = await pool.connect();
     await client.query("BEGIN");
     // Use set_config (parameterized) instead of SET LOCAL with $1
     await client.query(`SELECT set_config('app.user_id', $1, true)`, [userId]);
 
-    const { rows } = await client.query(SQL_GET_BUSINESS, [bid]);
+    const { rows } = await client.query<BusinessRow>(SQL_GET_BUSINESS, [bid]);
     await client.query("COMMIT");
 
     const row = rows[0];
@@ -86,25 +110,27 @@ async function handle(req: NextRequest, businessId?: string, userIdFromBody?: st
       },
       { headers: { "Cache-Control": "no-store" } }
     );
-  } catch (e) {
-    try { await client.query("ROLLBACK"); } catch {}
-    console.error("[GET /api/businesses/get-business-details] error:", e);
+  } catch (e: unknown) {
+    try {
+      if (client) await client.query("ROLLBACK");
+    } catch {
+      /* ignore */
+    }
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error("[GET /api/businesses/get-business-details] error:", msg);
     return NextResponse.json(
       { error: "INTERNAL", message: "Could not load business details." },
       { status: 500 }
     );
   } finally {
-    client.release();
+    if (client) client.release();
   }
 }
 
 // Your page currently calls POST with { businessId }
 export async function POST(req: NextRequest) {
-  const body = (await req.json().catch(() => ({}))) as {
-    businessId?: string;
-    userId?: string; // optional: you can pass this to avoid session lookup
-  };
-  return handle(req, body.businessId, body.userId);
+  const body = await readJson<Body>(req);
+  return handle(req, body?.businessId, body?.userId);
 }
 
 // Optional GET support (handy for manual testing via URL):

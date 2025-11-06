@@ -5,23 +5,20 @@ import { Pool } from "pg";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-/** ---------- PG Pool (singleton across hot reloads) ---------- */
-declare global {
-  // eslint-disable-next-line no-var
-  var _pgPoolBusinessSlugAvail: Pool | undefined;
-}
+/** ---------- PG Pool (singleton across hot reloads; no eslint-disable, no `any`) ---------- */
+const globalForPg = globalThis as unknown as { _pgPoolBusinessSlugAvail?: Pool };
 function getPool(): Pool {
-  if (!global._pgPoolBusinessSlugAvail) {
+  if (!globalForPg._pgPoolBusinessSlugAvail) {
     const cs = process.env.DATABASE_URL;
     if (!cs) throw new Error("DATABASE_URL is not set");
-    global._pgPoolBusinessSlugAvail = new Pool({
+    globalForPg._pgPoolBusinessSlugAvail = new Pool({
       connectionString: cs,
       // Neon typically needs SSL unless your URL has sslmode=require
       ssl: { rejectUnauthorized: false },
       max: 5,
     });
   }
-  return global._pgPoolBusinessSlugAvail;
+  return globalForPg._pgPoolBusinessSlugAvail;
 }
 
 /** ---------- Helpers ---------- */
@@ -66,12 +63,14 @@ const RESERVED = new Set([
   "uploads",
 ]);
 
+type IdRow = { id: string };
+
 /** ---------- GET /api/businesses/slug-availability?slug=&excludeId= ---------- */
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
     const rawSlug = (searchParams.get("slug") || "").trim();
-    const excludeId = (searchParams.get("excludeId") || "").trim() || null;
+    const excludeId = ((searchParams.get("excludeId") || "").trim() || null) as string | null;
 
     if (!rawSlug) {
       return NextResponse.json({ available: false, reason: "MISSING_SLUG" }, { status: 400 });
@@ -103,7 +102,7 @@ export async function GET(req: NextRequest) {
 
     // Check for conflicts (case-insensitive), ignoring soft-deleted rows.
     // When updating an existing business, exclude that row by id.
-    const q = await pool.query<{ id: string }>(
+    const q = await pool.query<IdRow>(
       `
       SELECT id
       FROM public.businesses
@@ -125,8 +124,9 @@ export async function GET(req: NextRequest) {
       },
       { status: 200 }
     );
-  } catch (err: any) {
-    console.error("[/api/businesses/slug-availability] error:", err?.stack || err);
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.stack ?? err.message : String(err);
+    console.error("[/api/businesses/slug-availability] error:", msg);
     return NextResponse.json({ available: false, reason: "SERVER_ERROR" }, { status: 500 });
   }
 }

@@ -9,15 +9,12 @@ import { useUser } from "@/app/lib/UserContext";
 import { API } from "@/app/lib/constants";
 import BackgroundSea from "@/app/ui/background-sea";
 
-/* ---------- Recharts Legend passthrough ---------- */
-const Legend: React.FC<any> = (props) => {
-  const Comp = (Recharts as any).Legend as React.ComponentType<any>;
-  return <Comp {...props} />;
-};
+/* ---------- Utils ---------- */
+async function safeJson<T>(res: Response): Promise<T> {
+  return (await res.json().catch(() => ({}))) as unknown as T;
+}
 
 /* ---------- Types ---------- */
-type Sentiment = "good" | "bad" | "unreviewed";
-
 type ReviewCounts = { good: number; bad: number; unreviewed: number };
 
 type EmailAnalyticsResp = {
@@ -125,11 +122,12 @@ export default function AnalyticsPage() {
           const t = await res.text().catch(() => "");
           throw new Error(t || `Failed to resolve business (${res.status})`);
         }
-        const data = await res.json();
+        const data = await safeJson<{ id?: string }>(res);
         if (!data?.id) throw new Error("No business id in response");
         if (alive) setBusinessId(String(data.id));
-      } catch (e: any) {
-        if (alive) setBizError(e?.message || "Failed to resolve business");
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        if (alive) setBizError(msg || "Failed to resolve business");
       } finally {
         if (alive) setBizLoading(false);
       }
@@ -153,7 +151,12 @@ export default function AnalyticsPage() {
           cache: "no-store",
           body: JSON.stringify({ businessId }),
         });
-        const data = await res.json().catch(() => ({} as any));
+        const data = await safeJson<{
+          error?: string;
+          display_name?: string;
+          name?: string;
+          business?: { display_name?: string; name?: string };
+        }>(res);
         if (!res.ok) throw new Error(data?.error || "Failed to fetch business name");
         const name =
           data?.display_name ??
@@ -257,14 +260,15 @@ export default function AnalyticsPage() {
         cache: "no-store",
       });
       if (!res.ok) throw new Error("Failed to fetch review counts");
-      const data = (await res.json()) as ReviewCounts;
+      const data = await safeJson<ReviewCounts>(res);
       setCounts({
         good: data.good ?? 0,
         bad: data.bad ?? 0,
         unreviewed: data.unreviewed ?? 0,
       });
-    } catch (e: any) {
-      setError(e?.message || "Failed to load statistics");
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setError(msg || "Failed to load statistics");
     } finally {
       setLoading(false);
     }
@@ -280,14 +284,15 @@ export default function AnalyticsPage() {
         body: JSON.stringify({ businessId: bizId }),
         cache: "no-store",
       });
-      const data: EmailAnalyticsResp = await res.json().catch(() => ({} as any));
+      const data = await safeJson<EmailAnalyticsResp>(res);
       if (!res.ok || data?.error) throw new Error(data?.error || "Failed to fetch email analytics");
       const metrics = data?.metrics ?? {};
       setEmailSent(metrics.emailSent ?? 0);
       setReviewClicked(metrics.reviewClicked ?? 0);
       setReviewSubmitted(metrics.reviewSubmitted ?? 0);
-    } catch (e: any) {
-      setEmailError(e?.message || "Failed to load email analytics");
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setEmailError(msg || "Failed to load email analytics");
     } finally {
       setEmailLoading(false);
     }
@@ -303,12 +308,13 @@ export default function AnalyticsPage() {
         cache: "no-store",
         body: JSON.stringify({ businessId: bizId }),
       });
-      const data: AvgEmailToClickResp = await res.json().catch(() => ({} as any));
+      const data = await safeJson<AvgEmailToClickResp>(res);
       if (!res.ok || !data?.success) throw new Error(data?.error || "Failed to compute average");
       setAvgSeconds(typeof data.avgSeconds === "number" ? data.avgSeconds : null);
       setAvgConsidered(data.consideredClients ?? 0);
-    } catch (e: any) {
-      setAvgError(e?.message || "Failed to load average time");
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setAvgError(msg || "Failed to load average time");
       setAvgSeconds(null);
       setAvgConsidered(0);
     } finally {
@@ -326,9 +332,9 @@ export default function AnalyticsPage() {
         cache: "no-store",
         body: JSON.stringify({ businessId: bizId }),
       });
-      const data: GetPhrasesResp = await res.json().catch(() => ({} as any));
+      const data = await safeJson<GetPhrasesResp>(res);
       if (!res.ok || data?.error) throw new Error(data?.error || "Failed to fetch phrases");
-      const items: PhrasePayload[] = (Array.isArray(data?.phrases) ? data!.phrases! : []).map((p: any) => ({
+      const items: PhrasePayload[] = (Array.isArray(data?.phrases) ? data.phrases! : []).map((p) => ({
         phrase_id: p.phrase_id,
         phrase: p.phrase,
         sentiment: p.sentiment === "bad" ? "bad" : "good",
@@ -337,11 +343,12 @@ export default function AnalyticsPage() {
         created_at: p.created_at ?? null,
         good_count: p.good_count ?? 0,
         bad_count: p.bad_count ?? 0,
-        excerpts: Array.isArray(p.excerpts) ? p.excerpts : [],
+        excerpts: Array.isArray(p.excerpts) ? (p.excerpts as ExcerptPayload[]) : [],
       }));
       setPhrases(items);
-    } catch (e: any) {
-      setPhrasesError(e?.message || "Failed to load phrases.");
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setPhrasesError(msg || "Failed to load phrases.");
     } finally {
       setPhrasesLoading(false);
     }
@@ -357,11 +364,12 @@ export default function AnalyticsPage() {
         cache: "no-store",
         body: JSON.stringify({ businessId: bizId }),
       });
-      const data: GraphResp = await res.json().catch(() => ({} as any));
+      const data = await safeJson<GraphResp>(res);
       if (!res.ok || !data?.success) throw new Error(data?.error || "Failed to load graph data.");
       setGraphPoints(Array.isArray(data.points) ? data.points : []);
-    } catch (e: any) {
-      setGraphError(e?.message || "Failed to load graph data.");
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setGraphError(msg || "Failed to load graph data.");
       setGraphPoints([]);
     } finally {
       setGraphLoading(false);
@@ -388,13 +396,14 @@ export default function AnalyticsPage() {
           }),
         });
 
-        const data: GetReviewResp = await res.json().catch(() => ({} as any));
+        const data = await safeJson<GetReviewResp>(res);
         if (!res.ok || !data?.success || !data?.review) {
           throw new Error(data?.error || "Review not found");
         }
         setModalReview(data.review);
-      } catch (e: any) {
-        setModalError(e?.message || "Failed to load full review.");
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        setModalError(msg || "Failed to load full review.");
       } finally {
         setModalLoading(false);
       }
@@ -438,8 +447,9 @@ export default function AnalyticsPage() {
         throw new Error(txt || `Failed to generate excerpts (${res.status})`);
       }
       await fetchPhrases(businessId);
-    } catch (e: any) {
-      setFindError(e?.message || "Failed to generate excerpts.");
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setFindError(msg || "Failed to generate excerpts.");
     } finally {
       setFindLoading(false);
     }
@@ -449,7 +459,7 @@ export default function AnalyticsPage() {
   const goToReviewSettings = useCallback(() => {
     const dest = username ? `/dashboard/${slug}/${bslug}/settings/review-settings` : "/settings/review-settings";
     router.push(dest);
-  }, [router, username]);
+  }, [router, username, slug, bslug]);
 
   /* ---------- Initial loads ---------- */
   const [findLoading, setFindLoading] = useState(false);
@@ -476,53 +486,53 @@ export default function AnalyticsPage() {
 
   /* ---------- Derived ---------- */
   const chartData = useMemo(() => {
-  const pts = graphPoints;
-  type Row = { label: string; good: number; bad: number; total: number; key: string };
-  let base: Row[] = [];
+    const pts = graphPoints;
+    type Row = { label: string; good: number; bad: number; total: number; key: string };
+    let base: Row[] = [];
 
-  if (pts.length === 0) return base;
+    if (pts.length === 0) return base;
 
-  if (granularity === "day") {
-    base = pts
-      .slice()
-      .sort((a, b) => (a[0] < b[0] ? -1 : 1))
-      .map(([d, good, bad]) => ({
-        label: formatDayLabel(d),
-        good,
-        bad,
-        total: good + bad,
-        key: d,
-      }));
-  } else {
-    // monthly aggregation first
-    const map = new Map<string, { good: number; bad: number }>();
-    for (const [d, good, bad] of pts) {
-      const k = monthKey(d);
-      const prev = map.get(k) || { good: 0, bad: 0 };
-      prev.good += good;
-      prev.bad += bad;
-      map.set(k, prev);
+    if (granularity === "day") {
+      base = pts
+        .slice()
+        .sort((a, b) => (a[0] < b[0] ? -1 : 1))
+        .map(([d, good, bad]) => ({
+          label: formatDayLabel(d),
+          good,
+          bad,
+          total: good + bad,
+          key: d,
+        }));
+    } else {
+      // monthly aggregation first
+      const map = new Map<string, { good: number; bad: number }>();
+      for (const [d, good, bad] of pts) {
+        const k = monthKey(d);
+        const prev = map.get(k) || { good: 0, bad: 0 };
+        prev.good += good;
+        prev.bad += bad;
+        map.set(k, prev);
+      }
+      base = Array.from(map.entries())
+        .sort(([a], [b]) => (a < b ? -1 : 1))
+        .map(([ym, v]) => ({
+          label: formatMonthLabel(ym),
+          good: v.good,
+          bad: v.bad,
+          total: v.good + v.bad,
+          key: ym,
+        }));
     }
-    base = Array.from(map.entries())
-      .sort(([a], [b]) => (a < b ? -1 : 1))
-      .map(([ym, v]) => ({
-        label: formatMonthLabel(ym),
-        good: v.good,
-        bad: v.bad,
-        total: v.good + v.bad,
-        key: ym,
-      }));
-  }
 
-  // 👉 Make it cumulative (monotonic non-decreasing)
-  let g = 0, b = 0;
-  return base.map((row) => {
-    g += Math.max(0, row.good || 0);
-    b += Math.max(0, row.bad  || 0);
-    return { ...row, good: g, bad: b, total: g + b };
-  });
-}, [graphPoints, granularity]);
-
+    // 👉 Make it cumulative (monotonic non-decreasing)
+    let g = 0,
+      b = 0;
+    return base.map((row) => {
+      g += Math.max(0, row.good || 0);
+      b += Math.max(0, row.bad || 0);
+      return { ...row, good: g, bad: b, total: g + b };
+    });
+  }, [graphPoints, granularity]);
 
   const goodPhrases = useMemo(() => phrases.filter((p) => p.sentiment === "good"), [phrases]);
   const badPhrases = useMemo(() => phrases.filter((p) => p.sentiment === "bad"), [phrases]);
@@ -558,9 +568,7 @@ export default function AnalyticsPage() {
     <div className="min-h-screen w-full text-gray-900">
       <BackgroundSea />
       {/* Fixed left sidebar */}
-     <aside className="fixed left-0 top-0 z-40 h-screen w-48 shrink-0 border-r border-gray-100 bg-white">
-
-
+      <aside className="fixed left-0 top-0 z-40 h-screen w-48 shrink-0 border-r border-gray-100 bg-white">
         <div className="px-4 pt-8 pb-8 border-b border-gray-100" />
         <nav className="py-3">
           <ul className="flex flex-col">
@@ -586,9 +594,11 @@ export default function AnalyticsPage() {
               onClick={onRefresh}
               disabled={refreshingTop || !businessId}
               className={`inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition ring-1 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500
-                ${refreshingTop
-                  ? "bg-gray-50 text-gray-400 ring-gray-200 cursor-not-allowed"
-                  : "bg-white hover:bg-gray-50 text-gray-700 ring-gray-200"}`}
+                ${
+                  refreshingTop
+                    ? "bg-gray-50 text-gray-400 ring-gray-200 cursor-not-allowed"
+                    : "bg-white hover:bg-gray-50 text-gray-700 ring-gray-200"
+                }`}
               aria-busy={refreshingTop}
             >
               {refreshingTop ? (
@@ -644,11 +654,7 @@ export default function AnalyticsPage() {
             ) : (
               <>
                 {popupPhraseId && activePhrase && (
-                  <ExcerptsCenteredModal
-                    phrase={activePhrase}
-                    onOpenExcerpt={onOpenExcerpt}
-                    onClose={() => setPopupPhraseId(null)}
-                  />
+                  <ExcerptsCenteredModal phrase={activePhrase} onOpenExcerpt={onOpenExcerpt} onClose={() => setPopupPhraseId(null)} />
                 )}
 
                 {/* GOOD */}
@@ -711,179 +717,173 @@ export default function AnalyticsPage() {
           </section>
 
           {/* ================== REVIEWS OVER TIME ================== */}
-<section id="sec-reviews" className="scroll-mt-28 mb-24">
-  {/* Controls: granularity + series toggles */}
-  <SectionHeader
-    title="Reviews over time"
-    controls={
-      <div className="flex flex-wrap items-center gap-2">
-        {/* Granularity */}
-        <div className="inline-flex items-center rounded-lg bg-gray-50 p-1 ring-1 ring-gray-200">
-          {(["day", "month"] as const).map((g) => {
-            const active = granularity === g;
-            return (
-              <button
-                key={g}
-                type="button"
-                onClick={() => setGranularity(g)}
-                className={`px-3 py-1.5 text-sm font-medium rounded-md transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500 ${
-                  active ? "bg-white shadow text-gray-900" : "text-gray-600 hover:bg-white/60"
-                }`}
-              >
-                {g === "day" ? "Daily" : "Monthly"}
-              </button>
-            );
-          })}
-        </div>
+          <section id="sec-reviews" className="scroll-mt-28 mb-24">
+            {/* Controls: granularity + series toggles */}
+            <SectionHeader
+              title="Reviews over time"
+              controls={
+                <div className="flex flex-wrap items-center gap-2">
+                  {/* Granularity */}
+                  <div className="inline-flex items-center rounded-lg bg-gray-50 p-1 ring-1 ring-gray-200">
+                    {(["day", "month"] as const).map((g) => {
+                      const active = granularity === g;
+                      return (
+                        <button
+                          key={g}
+                          type="button"
+                          onClick={() => setGranularity(g)}
+                          className={`px-3 py-1.5 text-sm font-medium rounded-md transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500 ${
+                            active ? "bg-white shadow text-gray-900" : "text-gray-600 hover:bg-white/60"
+                          }`}
+                        >
+                          {g === "day" ? "Daily" : "Monthly"}
+                        </button>
+                      );
+                    })}
+                  </div>
 
-        {/* Series toggles (colour-matched to lines) */}
-<div className="inline-flex items-center rounded-lg bg-gray-50 p-1 ring-1 ring-gray-200">
-  {[
-    { key: "total", label: "Total", on: showTotal, set: setShowTotal, dot: "bg-black",        activeText: "text-gray-900",  ring: "ring-slate-200" },
-    { key: "good",  label: "Good",  on: showGood,  set: setShowGood,  dot: "bg-emerald-500", activeText: "text-emerald-700", ring: "ring-emerald-200" },
-    { key: "bad",   label: "Bad",   on: showBad,   set: setShowBad,   dot: "bg-rose-500",    activeText: "text-rose-700",    ring: "ring-rose-200" },
-  ].map(({ key, label, on, set, dot, activeText, ring }) => (
-    <button
-      key={key}
-      type="button"
-      onClick={() => set(!on)}
-      className={`px-3 py-1.5 text-sm font-medium rounded-md transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500 ${
-        on ? `bg-white shadow ${activeText} ${ring}` : "text-gray-600 hover:bg-white/60"
-      }`}
-    >
-      <span className="inline-flex items-center gap-1.5">
-        <span className={`inline-block h-2.5 w-2.5 rounded-full ${dot} ${on ? "" : "opacity-30"}`} />
-        {label}
-      </span>
-    </button>
-  ))}
-</div>
+                  {/* Series toggles (colour-matched to lines) */}
+                  <div className="inline-flex items-center rounded-lg bg-gray-50 p-1 ring-1 ring-gray-200">
+                    {[
+                      { key: "total", label: "Total", on: showTotal, set: setShowTotal, dot: "bg-black", activeText: "text-gray-900", ring: "ring-slate-200" },
+                      { key: "good", label: "Good", on: showGood, set: setShowGood, dot: "bg-emerald-500", activeText: "text-emerald-700", ring: "ring-emerald-200" },
+                      { key: "bad", label: "Bad", on: showBad, set: setShowBad, dot: "bg-rose-500", activeText: "text-rose-700", ring: "ring-rose-200" },
+                    ].map(({ key, label, on, set, dot, activeText, ring }) => (
+                      <button
+                        key={key}
+                        type="button"
+                        onClick={() => set(!on)}
+                        className={`px-3 py-1.5 text-sm font-medium rounded-md transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500 ${
+                          on ? `bg-white shadow ${activeText} ${ring}` : "text-gray-600 hover:bg-white/60"
+                        }`}
+                      >
+                        <span className="inline-flex items-center gap-1.5">
+                          <span className={`inline-block h-2.5 w-2.5 rounded-full ${dot} ${on ? "" : "opacity-30"}`} />
+                          {label}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              }
+            />
 
-      </div>
-    }
-  />
+            {/* Style tokens to match the first example */}
+            {(() => {
+              const AXIS = "#64748b"; // slate-500
+              const GRID = "#e2e8f0"; // slate-200
+              const LINE_TOTAL = "#0f172a"; // slate-900
+              const LINE_GOOD = "#334155"; // slate-700
+              const LINE_BAD = "#475569"; // slate-600
 
-  {/* Style tokens to match the first example */}
-  {(() => {
-    const AXIS = "#64748b"; // slate-500
-    const GRID = "#e2e8f0"; // slate-200
-    const LINE_TOTAL = "#0f172a"; // slate-900
-    const LINE_GOOD  = "#334155"; // slate-700
-    const LINE_BAD   = "#475569"; // slate-600
+              const AREA_TOTAL_TOP = "rgba(15, 23, 42, 0.14)";
+              const AREA_TOTAL_BOT = "rgba(15, 23, 42, 0.04)";
+              const AREA_GOOD_TOP = "rgba(15, 23, 42, 0.10)";
+              const AREA_GOOD_BOT = "rgba(15, 23, 42, 0.03)";
+              const AREA_BAD_TOP = "rgba(15, 23, 42, 0.08)";
+              const AREA_BAD_BOT = "rgba(15, 23, 42, 0.02)";
 
-    const AREA_TOTAL_TOP = "rgba(15, 23, 42, 0.14)";
-    const AREA_TOTAL_BOT = "rgba(15, 23, 42, 0.04)";
-    const AREA_GOOD_TOP  = "rgba(15, 23, 42, 0.10)";
-    const AREA_GOOD_BOT  = "rgba(15, 23, 42, 0.03)";
-    const AREA_BAD_TOP   = "rgba(15, 23, 42, 0.08)";
-    const AREA_BAD_BOT   = "rgba(15, 23, 42, 0.02)";
+              // y-domain with headroom, using only visible series
+              const maxVisible = chartData.reduce(
+                (m, d) => Math.max(m, showTotal ? d.total : 0, showGood ? d.good : 0, showBad ? d.bad : 0),
+                0
+              );
+              const yTarget = Math.ceil(maxVisible * 1.25);
+              const yMax = Math.max(maxVisible + 1, Math.ceil(yTarget / 4) * 4);
 
-    // y-domain with headroom, using only visible series
-    const maxVisible = chartData.reduce((m, d) => Math.max(
-      m,
-      showTotal ? d.total : 0,
-      showGood  ? d.good  : 0,
-      showBad   ? d.bad   : 0
-    ), 0);
-    const yTarget = Math.ceil(maxVisible * 1.25);
-    const yMax = Math.max(maxVisible + 1, Math.ceil(yTarget / 4) * 4);
+              return (
+                <div className="h-80 w-full overflow-hidden">
+                  {graphLoading ? (
+                    <div className="h-full w-full animate-pulse bg-gray-50/60" />
+                  ) : chartData.length === 0 ? (
+                    <div className="flex h-full items-center justify-center text-gray-500">No reviews yet.</div>
+                  ) : (
+                    <Recharts.ResponsiveContainer width="100%" height="100%">
+                      <Recharts.ComposedChart data={chartData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+                        {/* Subtle grid & axes like the first example */}
+                        <Recharts.CartesianGrid stroke={GRID} vertical={false} />
+                        <Recharts.XAxis
+                          dataKey="label"
+                          tickMargin={8}
+                          tickLine={false}
+                          axisLine={{ stroke: GRID }}
+                          tick={{ fill: AXIS, fontSize: 12 }}
+                        />
+                        <Recharts.YAxis
+                          allowDecimals={false}
+                          domain={[0, yMax]}
+                          tick={{ fill: AXIS, fontSize: 12 }}
+                          axisLine={false}
+                          tickLine={false}
+                          width={36}
+                          tickMargin={12}
+                        />
 
-    return (
-      <div className="
-      h-80 w-full overflow-hidden
-    ">
-        {graphLoading ? (
-          <div className="h-full w-full animate-pulse bg-gray-50/60" />
-        ) : chartData.length === 0 ? (
-          <div className="flex h-full items-center justify-center text-gray-500">No reviews yet.</div>
-        ) : (
-          <Recharts.ResponsiveContainer width="100%" height="100%">
-            <Recharts.ComposedChart data={chartData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
-              {/* Subtle grid & axes like the first example */}
-              <Recharts.CartesianGrid stroke={GRID} vertical={false} />
-              <Recharts.XAxis
-                dataKey="label"
-                tickMargin={8}
-                tickLine={false}
-                axisLine={{ stroke: GRID }}
-                tick={{ fill: AXIS, fontSize: 12 }}
-              />
-              <Recharts.YAxis
-                allowDecimals={false}
-                domain={[0, yMax]}
-                tick={{ fill: AXIS, fontSize: 12 }}
-                axisLine={false}
-                tickLine={false}
-                width={36}
-                tickMargin={12}
-              />
+                        {/* Hover values */}
+                        <Recharts.Tooltip
+                          cursor={{ stroke: GRID }}
+                          contentStyle={{ borderRadius: 12, borderColor: GRID }}
+                          formatter={(value: number | string, name: string) => [value, name] as [number | string, string]}
+                          labelFormatter={(label: string) => label}
+                        />
 
-              {/* Hover values */}
-              <Recharts.Tooltip
-                cursor={{ stroke: GRID }}
-                contentStyle={{ borderRadius: 12, borderColor: GRID }}
-                formatter={(v: any, n: string) => [v, n]}
-                labelFormatter={(l) => l}
-              />
+                        {/* Gradients */}
+                        <defs>
+                          <linearGradient id="areaTotal" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stopColor={AREA_TOTAL_TOP} />
+                            <stop offset="100%" stopColor={AREA_TOTAL_BOT} />
+                          </linearGradient>
+                          <linearGradient id="areaGood" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stopColor={AREA_GOOD_TOP} />
+                            <stop offset="100%" stopColor={AREA_GOOD_BOT} />
+                          </linearGradient>
+                          <linearGradient id="areaBad" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stopColor={AREA_BAD_TOP} />
+                            <stop offset="100%" stopColor={AREA_BAD_BOT} />
+                          </linearGradient>
+                        </defs>
 
-              {/* Gradients */}
-              <defs>
-                <linearGradient id="areaTotal" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="rgba(15,23,42,0.14)" />
-                  <stop offset="100%" stopColor="rgba(15,23,42,0.04)" />
-                </linearGradient>
-                <linearGradient id="areaGood" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="rgba(16,185,129,0.16)" />
-                  <stop offset="100%" stopColor="rgba(16,185,129,0.04)" />
-                </linearGradient>
-                <linearGradient id="areaBad" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="rgba(239,68,68,0.16)" />
-                  <stop offset="100%" stopColor="rgba(239,68,68,0.04)" />
-                </linearGradient>
-              </defs>
-
-              {/* One Area per series (no separate Line → no duplicate tooltip rows) */}
-              {showTotal && (
-                <Recharts.Area
-                  type="linear"
-                  dataKey="total"
-                  name="Total"
-                  stroke="#0f172a"
-                  strokeWidth={2}
-                  dot={false}
-                  fill="url(#areaTotal)"
-                />
-              )}
-              {showGood && (
-                <Recharts.Area
-                  type="linear"
-                  dataKey="good"
-                  name="Good"
-                  stroke="#10b981"
-                  strokeWidth={2}
-                  dot={false}
-                  fill="url(#areaGood)"
-                />
-              )}
-              {showBad && (
-                <Recharts.Area
-                  type="linear"
-                  dataKey="bad"
-                  name="Bad"
-                  stroke="#ef4444"
-                  strokeWidth={2}
-                  dot={false}
-                  fill="url(#areaBad)"
-                />
-              )}
-            </Recharts.ComposedChart>
-          </Recharts.ResponsiveContainer>
-        )}
-      </div>
-    );
-  })()}
-</section>
-
+                        {/* One Area per series (no separate Line → no duplicate tooltip rows) */}
+                        {showTotal && (
+                          <Recharts.Area
+                            type="linear"
+                            dataKey="total"
+                            name="Total"
+                            stroke={LINE_TOTAL}
+                            strokeWidth={2}
+                            dot={false}
+                            fill="url(#areaTotal)"
+                          />
+                        )}
+                        {showGood && (
+                          <Recharts.Area
+                            type="linear"
+                            dataKey="good"
+                            name="Good"
+                            stroke={LINE_GOOD}
+                            strokeWidth={2}
+                            dot={false}
+                            fill="url(#areaGood)"
+                          />
+                        )}
+                        {showBad && (
+                          <Recharts.Area
+                            type="linear"
+                            dataKey="bad"
+                            name="Bad"
+                            stroke={LINE_BAD}
+                            strokeWidth={2}
+                            dot={false}
+                            fill="url(#areaBad)"
+                          />
+                        )}
+                      </Recharts.ComposedChart>
+                    </Recharts.ResponsiveContainer>
+                  )}
+                </div>
+              );
+            })()}
+          </section>
 
           {/* ================== EMAIL ANALYTICS ================== */}
           <section id="sec-email" className="scroll-mt-28 mb-24">
@@ -961,10 +961,7 @@ function SidebarLink({ label, onClick }: { label: string; onClick: () => void })
 }
 
 function InlineAlert({ tone, children }: { tone: "error" | "warn"; children: React.ReactNode }) {
-  const styles =
-    tone === "error"
-      ? "border-red-100 bg-red-50 text-red-700"
-      : "border-amber-100 bg-amber-50 text-amber-800";
+  const styles = tone === "error" ? "border-red-100 bg-red-50 text-red-700" : "border-amber-100 bg-amber-50 text-amber-800";
   return <div className={`rounded-2xl border p-4 text-sm ${styles}`}>{children}</div>;
 }
 
@@ -1076,11 +1073,7 @@ function ExcerptsCenteredModal({
               const wrap = isGood ? "border-emerald-100 bg-emerald-50/70 text-emerald-900" : "border-rose-100 bg-rose-50/80 text-rose-900";
               const badge = isGood ? "bg-emerald-50 text-emerald-800 ring-emerald-200" : "bg-rose-50 text-rose-800 ring-rose-200";
               return (
-                <li
-                  key={e.excerpt_id}
-                  className={`rounded-lg border px-3 py-2 text-xs ${wrap} cursor-pointer`}
-                  onClick={() => onOpenExcerpt(e)}
-                >
+                <li key={e.excerpt_id} className={`rounded-lg border px-3 py-2 text-xs ${wrap} cursor-pointer`} onClick={() => onOpenExcerpt(e)}>
                   <div className="flex items-center justify-between gap-2">
                     <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium ring-1 ${badge}`}>
                       {isGood ? "good" : "bad"}
@@ -1225,16 +1218,10 @@ function TimeStatCard({
       <div className="mb-2 flex items-center justify-between">
         <div className="text-sm font-semibold text-gray-800">{title}</div>
         {badgeText && (
-          <span className="rounded-full px-2 py-1 text-xs font-medium ring-1 bg-gray-50 text-gray-800 ring-gray-200">
-            {badgeText}
-          </span>
+          <span className="rounded-full px-2 py-1 text-xs font-medium ring-1 bg-gray-50 text-gray-800 ring-gray-200">{badgeText}</span>
         )}
       </div>
-      {loading ? (
-        <div className="h-6 w-32 animate-pulse rounded bg-gray-200" />
-      ) : (
-        <div className="text-2xl font-semibold tracking-tight text-gray-900">{formatted}</div>
-      )}
+      {loading ? <div className="h-6 w-32 animate-pulse rounded bg-gray-200" /> : <div className="text-2xl font-semibold tracking-tight text-gray-900">{formatted}</div>}
       {!loading && <div className="mt-1 text-xs text-gray-500">Average delay from sending to first click</div>}
     </div>
   );

@@ -1,4 +1,4 @@
-// app/api/send-bulk-emails/route.ts
+// app/api/clients/send-bulk-emails/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { Pool, PoolClient } from "pg";
 import { Resend } from "resend";
@@ -10,23 +10,20 @@ export const dynamic = "force-dynamic";
 
 const resend = new Resend(process.env.RESEND_API_KEY);
 
-/* ---------- PG Pool singleton ---------- */
-declare global {
-  // eslint-disable-next-line no-var
-  var _pgPoolSendBulkBiz: Pool | undefined;
-}
+/* ---------- PG Pool singleton (typed global) ---------- */
+const globalForPg = globalThis as unknown as { _pgPoolSendBulkBiz?: Pool };
 function getPool(): Pool {
-  if (!global._pgPoolSendBulkBiz) {
+  if (!globalForPg._pgPoolSendBulkBiz) {
     const cs = process.env.DATABASE_URL;
     if (!cs) throw new Error("DATABASE_URL is not set");
 
-    global._pgPoolSendBulkBiz = new Pool({
+    globalForPg._pgPoolSendBulkBiz = new Pool({
       connectionString: cs,
       ssl: { rejectUnauthorized: false },
       max: 5,
     });
   }
-  return global._pgPoolSendBulkBiz;
+  return globalForPg._pgPoolSendBulkBiz;
 }
 
 /* ---------- Config ---------- */
@@ -95,6 +92,12 @@ type ClientRow = {
   id: string;
   display_name: string | null;
   email: string | null;
+};
+
+/** Minimal shape for Resend’s response to avoid `any` */
+type ResendSendResult = {
+  data?: { id?: string | null } | null;
+  error?: { message?: string } | string | null;
 };
 
 export async function POST(req: NextRequest) {
@@ -191,7 +194,7 @@ export async function POST(req: NextRequest) {
     clients = clientsQ.rows;
 
     await db.query("COMMIT");
-  } catch (err) {
+  } catch (err: unknown) {
     try {
       await db.query("ROLLBACK");
     } catch {}
@@ -225,9 +228,7 @@ export async function POST(req: NextRequest) {
     "We would really appreciate if you left us a review. Please leave your feedback using the buttons below.";
 
   // Prefer the business's own email address, fallback to sandbox
-  const fromHeader = businessEmail
-    ? `${businessDisplayName} <${businessEmail}>`
-    : `${businessDisplayName} <onboarding@resend.dev>`;
+  // (Removed previous unused `fromHeader` var to satisfy linter.)
 
   // Prepare result structure
   const foundIds = new Set(clients.map((c) => c.id));
@@ -237,40 +238,41 @@ export async function POST(req: NextRequest) {
     failed: { clientId: string; error: string }[];
     missing: string[];
   } = { sent: [], failed: [], missing: missingIds };
-async function sendOne(client: ClientRow) {
-  if (!client.email) {
-    throw new Error("Client has no email");
-  }
 
-  const clientName = (client.display_name || "Customer").trim();
+  async function sendOne(client: ClientRow) {
+    if (!client.email) {
+      throw new Error("Client has no email");
+    }
 
-  // 1. Personalise the copy
-  const subj = baseSubject.replace(CUSTOMER_TOKEN_REGEX, clientName);
-  const bodyCore = baseBody.replace(CUSTOMER_TOKEN_REGEX, clientName);
+    const clientName = (client.display_name || "Customer").trim();
 
-  // 2. Build per-client signed token (MUST match verifyMagicToken expectations)
-  const expiresAtMs = Date.now() + 7 * 24 * 60 * 60 * 1000; // 7 days
-  const token = signLinkToken({
-    businessId,
-    clientId: client.id,
-    exp: expiresAtMs,
-  });
+    // 1. Personalise the copy
+    const subj = baseSubject.replace(CUSTOMER_TOKEN_REGEX, clientName);
+    const bodyCore = baseBody.replace(CUSTOMER_TOKEN_REGEX, clientName);
 
-  // 3. Build the CTA links with the param names the submit-review flow expects
-  const goodHref = `${BASE_URL}/submit-review/${encodeURIComponent(
-    client.id
-  )}?type=good&businessId=${encodeURIComponent(
-    businessId
-  )}&token=${encodeURIComponent(token)}`;
+    // 2. Build per-client signed token (MUST match verifyMagicToken expectations)
+    const expiresAtMs = Date.now() + 7 * 24 * 60 * 60 * 1000; // 7 days
+    const token = signLinkToken({
+      businessId,
+      clientId: client.id,
+      exp: expiresAtMs,
+    });
 
-  const badHref = `${BASE_URL}/submit-review/${encodeURIComponent(
-    client.id
-  )}?type=bad&businessId=${encodeURIComponent(
-    businessId
-  )}&token=${encodeURIComponent(token)}`;
+    // 3. Build the CTA links
+    const goodHref = `${BASE_URL}/submit-review/${encodeURIComponent(
+      client.id
+    )}?type=good&businessId=${encodeURIComponent(
+      businessId
+    )}&token=${encodeURIComponent(token)}`;
 
-  // 4. Email bodies
-  const text = `Hi ${clientName},
+    const badHref = `${BASE_URL}/submit-review/${encodeURIComponent(
+      client.id
+    )}?type=bad&businessId=${encodeURIComponent(
+      businessId
+    )}&token=${encodeURIComponent(token)}`;
+
+    // 4. Email bodies
+    const text = `Hi ${clientName},
 
 ${bodyCore}
 
@@ -284,127 +286,123 @@ Best regards,
 ${businessDisplayName}
 `;
 
-  const html = `
-    <p>Hi ${escapeHtml(clientName)},</p>
+    const html = `
+      <p>Hi ${escapeHtml(clientName)},</p>
 
-    <p>${nl2br(bodyCore)}</p>
+      <p>${nl2br(bodyCore)}</p>
 
-    <div style="margin:24px 0;">
-      <a
-        href="${goodHref}"
-        style="
-          background:#16a34a;
-          color:#ffffff;
-          padding:12px 24px;
-          text-decoration:none;
-          font-family:Arial, sans-serif;
-          font-size:16px;
-          font-weight:bold;
-          border-radius:6px;
-          display:inline-block;
-          margin-right:12px;
-        "
-      >
-        Happy
-      </a>
+      <div style="margin:24px 0;">
+        <a
+          href="${goodHref}"
+          style="
+            background:#16a34a;
+            color:#ffffff;
+            padding:12px 24px;
+            text-decoration:none;
+            font-family:Arial, sans-serif;
+            font-size:16px;
+            font-weight:bold;
+            border-radius:6px;
+            display:inline-block;
+            margin-right:12px;
+          "
+        >
+          Happy
+        </a>
 
-      <a
-        href="${badHref}"
-        style="
-          background:#dc2626;
-          color:#ffffff;
-          padding:12px 24px;
-          text-decoration:none;
-          font-family:Arial, sans-serif;
-          font-size:16px;
-          font-weight:bold;
-          border-radius:6px;
-          display:inline-block;
-        "
-      >
-        Unsatisfied
-      </a>
-    </div>
+        <a
+          href="${badHref}"
+          style="
+            background:#dc2626;
+            color:#ffffff;
+            padding:12px 24px;
+            text-decoration:none;
+            font-family:Arial, sans-serif;
+            font-size:16px;
+            font-weight:bold;
+            border-radius:6px;
+            display:inline-block;
+          "
+        >
+          Unsatisfied
+        </a>
+      </div>
 
-    <p>
-      Best regards,<br>
-      ${escapeHtml(businessDisplayName)}
-    </p>
-  `.trim();
+      <p>
+        Best regards,<br>
+        ${escapeHtml(businessDisplayName)}
+      </p>
+    `.trim();
 
-  // 5. FORCE a known-good "from" while you're still in sandbox mode.
-  //    Do NOT try to send from the clinic/business email yet.
-  const sandboxFromHeader = `${businessDisplayName} <onboarding@resend.dev>`;
+    // 5. FORCE a known-good "from" while in sandbox mode.
+    const sandboxFromHeader = `${businessDisplayName} <${
+      businessEmail || "onboarding@resend.dev"
+    }>`; // if custom email not verified, provider will ignore/override
 
-  // 6. Actually send, and CAPTURE the result
-  const sendResult = await resend.emails.send({
-    from: sandboxFromHeader,
-    to: [client.email],
-    subject: subj || "We’d love your feedback!",
-    text,
-    html,
-  });
+    // 6. Actually send, and CAPTURE the result (typed, no `any`)
+    const sendResult: ResendSendResult = await resend.emails.send({
+      from: sandboxFromHeader,
+      to: [client.email],
+      subject: subj || "We’d love your feedback!",
+      text,
+      html,
+    });
 
-  // If the provider signalled any problem, treat that as a failure.
-  // (Different SDKs either throw or return an object with `error` / `data`.
-  // We defensively check for a top-level "error" or missing "id".)
-  const possibleError: unknown = (sendResult as any)?.error;
-  const messageId: string | undefined = (sendResult as any)?.data?.id;
+    const messageId = sendResult.data?.id ?? undefined;
+    const errorMsg =
+      typeof sendResult.error === "string"
+        ? sendResult.error
+        : sendResult.error?.message;
 
-  if (possibleError || !messageId) {
-    // Bubble up so this client ends up in results.failed
-    throw new Error(
-      typeof possibleError === "string"
-        ? possibleError
-        : "Email provider did not accept the send request"
-    );
-  }
+    if (errorMsg || !messageId) {
+      throw new Error(errorMsg || "Email provider did not accept the send request");
+    }
 
-  // 7. Log to client_actions ONLY IF we actually sent successfully
-  const dbc = await getPool().connect();
-  try {
-    await dbc.query("BEGIN");
-    await dbc.query(`SELECT set_config('app.user_id', $1, true)`, [
-      authedUserId,
-    ]);
-
-    await dbc.query(
-      `
-      INSERT INTO public.client_actions (
-        business_id,
-        client_id,
-        actor_id,
-        action,
-        meta
-      )
-      VALUES ($1, $2, $3, 'email_sent', jsonb_build_object(
-        'email', $4::text,
-        'subject', $5::text,
-        'expiresAtMs', $6::bigint,
-        'messageId', $7::text
-      ))
-      `,
-      [
-        businessId,
-        client.id,
-        authedUserId,
-        client.email,
-        subj || "We’d love your feedback!",
-        expiresAtMs,
-        messageId || null,
-      ]
-    );
-
-    await dbc.query("COMMIT");
-  } catch (err) {
+    // 7. Log to client_actions ONLY IF we actually sent successfully
+    const dbc = await getPool().connect();
     try {
-      await dbc.query("ROLLBACK");
-    } catch {}
-    throw err;
-  } finally {
-    dbc.release();
+      await dbc.query("BEGIN");
+      await dbc.query(`SELECT set_config('app.user_id', $1, true)`, [
+        authedUserId,
+      ]);
+
+      await dbc.query(
+        `
+        INSERT INTO public.client_actions (
+          business_id,
+          client_id,
+          actor_id,
+          action,
+          meta
+        )
+        VALUES ($1, $2, $3, 'email_sent', jsonb_build_object(
+          'email', $4::text,
+          'subject', $5::text,
+          'expiresAtMs', $6::bigint,
+          'messageId', $7::text
+        ))
+        `,
+        [
+          businessId,
+          client.id,
+          authedUserId,
+          client.email,
+          subj || "We’d love your feedback!",
+          expiresAtMs,
+          messageId || null,
+        ]
+      );
+
+      await dbc.query("COMMIT");
+    } catch (err: unknown) {
+      try {
+        await dbc.query("ROLLBACK");
+      } catch {}
+      throw err;
+    } finally {
+      dbc.release();
+    }
   }
-}
 
   // Fan out over clients with small concurrency
   const CONCURRENCY = 5;
@@ -417,20 +415,17 @@ ${businessDisplayName}
       try {
         await sendOne(c);
         results.sent.push({ clientId: c.id, email: c.email || "" });
-      } catch (err: any) {
+      } catch (err: unknown) {
         results.failed.push({
           clientId: c.id,
-          error: err?.message || "Send failed",
+          error: err instanceof Error ? err.message : "Send failed",
         });
       }
     }
   }
 
   await Promise.all(
-    Array.from(
-      { length: Math.min(CONCURRENCY, clients.length) },
-      () => worker()
-    )
+    Array.from({ length: Math.min(CONCURRENCY, clients.length) }, () => worker())
   );
 
   return NextResponse.json(

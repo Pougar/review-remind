@@ -1,30 +1,28 @@
 // app/api/client-actions/review-clicked/route.ts
 import { NextRequest, NextResponse } from "next/server";
-import { Pool, PoolClient } from "pg";
+import { Pool, type PoolClient } from "pg";
 import { verifyMagicToken } from "@/app/lib/magic-token";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /* ============================================================
-   PG Pool (singleton across HMR)
+   PG Pool (singleton across HMR) — typed, no eslint-disable
    ============================================================ */
-declare global {
-  // eslint-disable-next-line no-var
-  var _pgPoolReviewClickedPublicFinal: Pool | undefined;
-}
-
+const globalForPg = globalThis as unknown as {
+  _pgPoolReviewClickedPublicFinal?: Pool;
+};
 function getPool(): Pool {
-  if (!global._pgPoolReviewClickedPublicFinal) {
+  if (!globalForPg._pgPoolReviewClickedPublicFinal) {
     const cs = process.env.DATABASE_URL;
     if (!cs) throw new Error("DATABASE_URL is not set");
-    global._pgPoolReviewClickedPublicFinal = new Pool({
+    globalForPg._pgPoolReviewClickedPublicFinal = new Pool({
       connectionString: cs,
       ssl: { rejectUnauthorized: false },
       max: 5,
     });
   }
-  return global._pgPoolReviewClickedPublicFinal;
+  return globalForPg._pgPoolReviewClickedPublicFinal;
 }
 
 /* ============================================================
@@ -32,8 +30,7 @@ function getPool(): Pool {
    ============================================================ */
 
 // strict UUID test
-const isUUID = (v?: string | null) =>
-  !!v && /^[0-9a-fA-F-]{36}$/.test(v);
+const isUUID = (v?: string | null) => !!v && /^[0-9a-fA-F-]{36}$/.test(v);
 
 // allow preview client "test"
 const isClientIdPublicValid = (cid?: string | null) => {
@@ -61,6 +58,15 @@ function serverError(message = "Could not register review click.") {
     { error: "SERVER_ERROR", message },
     { status: 500 }
   );
+}
+
+// Safe JSON reader (avoid any)
+async function readJson<T>(req: NextRequest): Promise<T | null> {
+  try {
+    return (await req.json()) as unknown as T;
+  } catch {
+    return null;
+  }
 }
 
 /* ============================================================
@@ -98,21 +104,17 @@ type RespBody =
 
 export async function POST(req: NextRequest) {
   // ---- 1. Parse body
-  const body = (await req.json().catch(() => ({}))) as ReqBody;
-  const rawBusinessId = (body?.businessId || "").trim();
-  const rawClientId = (body?.clientId || "").trim();
-  const rawToken = (body?.token || "").trim();
+  const body = (await readJson<ReqBody>(req)) ?? {};
+  const rawBusinessId = (body.businessId ?? "").trim();
+  const rawClientId = (body.clientId ?? "").trim();
+  const rawToken = (body.token ?? "").trim();
 
   // ---- 2. Basic validation
   if (!isUUID(rawBusinessId)) {
-    return badRequest("Valid businessId is required.", {
-      field: "businessId",
-    });
+    return badRequest("Valid businessId is required.", { field: "businessId" });
   }
   if (!isClientIdPublicValid(rawClientId)) {
-    return badRequest("Valid clientId is required.", {
-      field: "clientId",
-    });
+    return badRequest("Valid clientId is required.", { field: "clientId" });
   }
   if (!rawToken) {
     return badRequest("token is required.", { field: "token" });
@@ -123,52 +125,30 @@ export async function POST(req: NextRequest) {
   const token = rawToken;
 
   // ---- 3. Verify token authenticity and expiry
-  // Uses your updated verifyMagicToken, which:
-  //   - checks HMAC against JSON payload
-  //   - checks exp (ms or sec)
-  //   - checks businessId/clientId match
-  //   - special-cases clientId === "test"
-  const check = verifyMagicToken({
-    token,
-    businessId,
-    clientId,
-  });
-
+  const check = verifyMagicToken({ token, businessId, clientId });
   if (!check.ok) {
     return forbidden(check.error);
   }
 
-  // ---- 4. Special case: preview/test links
-  // "test" is allowed to skip DB entirely.
+  // ---- 4. Special case: preview/test links (skip DB)
   if (clientId === "test") {
     const resp: RespBody = { already: false };
     return NextResponse.json(resp, { status: 200 });
   }
 
-  // Past here: real UUID client. We now touch the DB with no BetterAuth
-  // session. Your RLS must explicitly allow:
-  // - SELECT on clients for this (businessId, clientId)
-  // - SELECT on client_actions for email_sent / review_clicked
-  // - SELECT on reviews for checking if already submitted
-  // - INSERT into client_actions for review_clicked
-  //
-  // Typically you'd add a special RLS policy for these public flows.
-
+  // ---- 5. DB ops (public flow; ensure RLS policies allow what we do)
   const pool = getPool();
   const db: PoolClient = await pool.connect();
 
   try {
     await db.query("BEGIN");
 
-    // ---- 5. Verify the client actually exists under this business
+    // Verify the client actually exists under this business
     const clientQ = await db.query<ClientRow>(
       `
-      SELECT
-        c.id,
-        c.business_id
+      SELECT c.id, c.business_id
       FROM public.clients c
-      WHERE c.id = $1
-        AND c.business_id = $2
+      WHERE c.id = $1 AND c.business_id = $2
       LIMIT 1
       `,
       [clientId, businessId]
@@ -177,16 +157,12 @@ export async function POST(req: NextRequest) {
     if (clientQ.rowCount === 0) {
       await db.query("ROLLBACK");
       return NextResponse.json(
-        {
-          error: "NOT_FOUND",
-          message: "Client not found for this business.",
-        },
+        { error: "NOT_FOUND", message: "Client not found for this business." },
         { status: 404 }
       );
     }
 
-    // ---- 6. Check that we actually sent them an invite email
-    // We infer this by existence of an 'email_sent' action in client_actions.
+    // Check that we actually sent them an invite email
     const emailSentQ = await db.query(
       `
       SELECT 1
@@ -212,10 +188,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // ---- 7. Check if they've already submitted a review.
-    // We treat "already submitted" as:
-    //   there is at least one row in public.reviews
-    //   for this (businessId, clientId) that isn't soft-deleted.
+    // Already submitted a review?
     const submittedQ = await db.query(
       `
       SELECT 1
@@ -239,7 +212,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // ---- 8. Have we ALREADY recorded a 'review_clicked'?
+    // Have we ALREADY recorded a 'link_clicked'?
     const alreadyQ = await db.query(
       `
       SELECT 1
@@ -254,9 +227,7 @@ export async function POST(req: NextRequest) {
 
     const already = (alreadyQ.rowCount ?? 0) > 0;
 
-    // ---- 9. Log a fresh 'review_clicked' event for analytics/audit
-    // We store IP + UA in meta for context.
-    // actor_id stays NULL because this is a public, unauthenticated hit.
+    // Log a fresh 'link_clicked'
     const ip =
       req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
       req.headers.get("x-real-ip") ||
@@ -277,10 +248,7 @@ export async function POST(req: NextRequest) {
         $2::uuid,
         NULL,
         'link_clicked'::public.client_action_type,
-        jsonb_build_object(
-          'ip', $3::text,
-          'ua', $4::text
-        )
+        jsonb_build_object('ip', $3::text, 'ua', $4::text)
       )
       `,
       [businessId, clientId, ip, ua]
@@ -288,20 +256,19 @@ export async function POST(req: NextRequest) {
 
     await db.query("COMMIT");
 
-    // ---- 10. Send the response
     const resp: RespBody = { already };
     return NextResponse.json(resp, { status: 200 });
-  } catch (err: any) {
+  } catch (err: unknown) {
     try {
       await db.query("ROLLBACK");
     } catch {
       /* ignore rollback error */
     }
 
-    console.error("[/api/client-actions/review-clicked] error:", err);
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("[/api/client-actions/review-clicked] error:", msg);
 
-    const msg = String(err?.message || "").toLowerCase();
-    if (msg.includes("row-level security")) {
+    if (msg.toLowerCase().includes("row-level security")) {
       return serverError(
         "Permission denied by row-level security. The public review link may need an RLS policy for reading client info, checking prior reviews, and logging review_clicked."
       );

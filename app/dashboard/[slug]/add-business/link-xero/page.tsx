@@ -111,8 +111,8 @@ export default function LinkXeroPage() {
           return;
         }
       }
-    } catch (e: any) {
-      setStatusMsg(e?.message || "Could not check onboarding stage.");
+    } catch (e: unknown) {
+      setStatusMsg(e instanceof Error ? e.message : "Could not check onboarding stage.");
     }
   }, [businessId, router, slug, nextDest]);
 
@@ -151,8 +151,8 @@ export default function LinkXeroPage() {
       }
 
       return { connected, tenantCount };
-    } catch (e: any) {
-      setStatusMsg(e?.message || "Could not verify Xero connection.");
+    } catch (e: unknown) {
+      setStatusMsg(e instanceof Error ? e.message : "Could not verify Xero connection.");
       return { connected: false, tenantCount: 0 };
     } finally {
       setChecking(false);
@@ -217,17 +217,14 @@ export default function LinkXeroPage() {
       const { authorizeUrl } = (await res.json().catch(() => ({}))) as { authorizeUrl?: string };
       if (!authorizeUrl) throw new Error("Missing authorize URL from server.");
 
-      const tab = window.open("", "_blank");
-      if (tab) {
-        try {
-          // @ts-ignore
-          tab.opener = null;
-        } catch {}
-        tab.location.href = authorizeUrl;
-      } else {
+      // Open with noopener directly — avoids needing ts-ignores and is safer.
+      const tab = window.open(authorizeUrl, "_blank", "noopener,noreferrer");
+      if (!tab) {
         // fallback if popup blocked
         window.location.href = authorizeUrl;
       }
+    } catch (e: unknown) {
+      setStatusMsg(e instanceof Error ? e.message : "Failed to start Xero connect.");
     } finally {
       setConnectDisabled(false);
     }
@@ -290,7 +287,7 @@ export default function LinkXeroPage() {
             </button>
           </div>
 
-          <p className="pt-2 text-xs text-slate-500">
+        <p className="pt-2 text-xs text-slate-500">
             You can revoke access at any time in Xero. We only read invoice metadata needed for your workflow.
           </p>
         </div>

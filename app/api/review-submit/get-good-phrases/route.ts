@@ -10,7 +10,6 @@ export const dynamic = "force-dynamic";
    PG Pool (singleton across HMR)
    ============================================================ */
 declare global {
-  // eslint-disable-next-line no-var
   var _pgPoolGetGoodPhrasesPublic: Pool | undefined;
 }
 
@@ -30,8 +29,7 @@ function getPool(): Pool {
 /* ============================================================
    Helpers
    ============================================================ */
-const isUUID = (v?: string | null) =>
-  !!v && /^[0-9a-fA-F-]{36}$/.test(v);
+const isUUID = (v?: string | null) => !!v && /^[0-9a-fA-F-]{36}$/.test(v);
 
 const isClientIdPublicValid = (cid?: string | null) => {
   if (!cid) return false;
@@ -47,17 +45,11 @@ function badRequest(message: string, extra?: Record<string, unknown>) {
 }
 
 function forbidden(message: string) {
-  return NextResponse.json(
-    { error: "INVALID_TOKEN", message },
-    { status: 403 }
-  );
+  return NextResponse.json({ error: "INVALID_TOKEN", message }, { status: 403 });
 }
 
 function serverError(message = "Could not load good phrases.") {
-  return NextResponse.json(
-    { error: "SERVER_ERROR", message },
-    { status: 500 }
-  );
+  return NextResponse.json({ error: "SERVER_ERROR", message }, { status: 500 });
 }
 
 /* ============================================================
@@ -95,14 +87,6 @@ type RespSuccess = {
     created_at: string | null;
     updated_at: string | null;
   }[];
-};
-
-type RespError = {
-  error:
-    | "INVALID_INPUT"
-    | "INVALID_TOKEN"
-    | "SERVER_ERROR";
-  message?: string;
 };
 
 /* ============================================================
@@ -213,10 +197,11 @@ export async function POST(req: NextRequest) {
     };
 
     return NextResponse.json(resp, { status: 200 });
-  } catch (err: any) {
-    console.error("[/api/public/get-good-phrases] error:", err?.stack || err);
+  } catch (err: unknown) {
+    const e = err instanceof Error ? err : new Error(String(err));
+    console.error("[/api/public/get-good-phrases] error:", e.stack ?? e);
 
-    const msg = String(err?.message || "").toLowerCase();
+    const msg = (e.message || "").toLowerCase();
     if (msg.includes("row-level security")) {
       return serverError(
         "Permission denied by row-level security. Public phrase access likely needs an RLS policy allowing reads for valid tokens."

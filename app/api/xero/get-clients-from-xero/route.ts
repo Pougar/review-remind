@@ -14,7 +14,9 @@ const DEFAULT_SINCE_WHERE = "Date >= DateTime(2025, 1, 1)";
 const DEFAULT_SINCE_ISO = "2025-01-01";
 
 /* ---------------- PG pool (singleton) ---------------- */
-declare global { var _pgPoolXero: Pool | undefined; }
+declare global {
+  var _pgPoolXero: Pool | undefined;
+}
 function getPool(): Pool {
   if (!global._pgPoolXero) {
     const cs = process.env.DATABASE_URL;
@@ -64,23 +66,29 @@ type XeroContactsResponse = { Contacts?: XeroContact[] };
 
 /* ---------------- local types & utils ---------------- */
 type InvoiceStatus = "PAID" | "SENT" | "DRAFT" | "PAID BUT NOT SENT";
-const isUUID = (v: unknown): v is string => typeof v === "string" && /^[0-9a-fA-F-]{36}$/.test(v);
+const isUUID = (v: unknown): v is string =>
+  typeof v === "string" && /^[0-9a-fA-F-]{36}$/.test(v);
 
 function requireEnv(name: string): string {
   const v = process.env[name];
   if (!v) throw new Error(`Missing required env var: ${name}`);
   return v;
 }
-function nowPlus(ms: number) { return new Date(Date.now() + ms); }
+function nowPlus(ms: number) {
+  return new Date(Date.now() + ms);
+}
 function isExpired(expiresAt?: Date | string | null, skewSec = 60): boolean {
   if (!expiresAt) return true;
-  const t = typeof expiresAt === "string" ? Date.parse(expiresAt) : expiresAt.getTime();
+  const t =
+    typeof expiresAt === "string" ? Date.parse(expiresAt) : expiresAt.getTime();
   return Date.now() + skewSec * 1000 >= t;
 }
 function pickPhone(phones?: XeroContactPhone[] | null): string | null {
   if (!phones || phones.length === 0) return null;
   const pref = ["DEFAULT", "MOBILE", "DDI", "FAX"];
-  const sorted = [...phones].sort((a, b) => pref.indexOf(a.PhoneType || "") - pref.indexOf(b.PhoneType || ""));
+  const sorted = [...phones].sort(
+    (a, b) => pref.indexOf(a.PhoneType || "") - pref.indexOf(b.PhoneType || "")
+  );
   for (const p of sorted) {
     const num = (p.PhoneNumber || "").trim();
     if (num) {
@@ -91,7 +99,10 @@ function pickPhone(phones?: XeroContactPhone[] | null): string | null {
   }
   return null;
 }
-function computeInvoiceStatus(sentToContact?: boolean | null, status?: string | null): InvoiceStatus {
+function computeInvoiceStatus(
+  sentToContact?: boolean | null,
+  status?: string | null
+): InvoiceStatus {
   const isPaid = (status || "").toUpperCase() === "PAID";
   const sent = !!sentToContact;
   if (isPaid) return sent ? "PAID" : "PAID BUT NOT SENT";
@@ -107,12 +118,17 @@ function buildSinceWhere(isoDate?: string): { where: string; sinceISO: string } 
   const y = d.getUTCFullYear();
   const m = d.getUTCMonth() + 1;
   const day = d.getUTCDate();
-  const sinceISO = `${y}-${String(m).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+  const sinceISO = `${y}-${String(m).padStart(2, "0")}-${String(day).padStart(
+    2,
+    "0"
+  )}`;
   return { where: `Date >= DateTime(${y}, ${m}, ${day})`, sinceISO };
 }
 
 /* ---------------- External: Xero helpers ---------------- */
-async function refreshAccessToken(refresh_token: string): Promise<XeroTokenResponse> {
+async function refreshAccessToken(
+  refresh_token: string
+): Promise<XeroTokenResponse> {
   const clientId = requireEnv("XERO_CLIENT_ID");
   const clientSecret = requireEnv("XERO_CLIENT_SECRET");
   const resp = await fetch(XERO_TOKEN_URL, {
@@ -132,11 +148,18 @@ async function refreshAccessToken(refresh_token: string): Promise<XeroTokenRespo
   return (await resp.json()) as XeroTokenResponse;
 }
 
-async function collectInvoiceContactData(accessToken: string, tenantId: string, sinceWhere: string) {
+async function collectInvoiceContactData(
+  accessToken: string,
+  tenantId: string,
+  sinceWhere: string
+) {
   const uniqueIds = new Set<string>();
   const fallbackNames = new Map<string, string>();
   const descSets = new Map<string, Set<string>>();
-  const latestByContact = new Map<string, { ts: number; sent?: boolean | null; status?: string | null }>();
+  const latestByContact = new Map<
+    string,
+    { ts: number; sent?: boolean | null; status?: string | null }
+  >();
 
   let page = 1;
   const maxPages = 50;
@@ -148,7 +171,11 @@ async function collectInvoiceContactData(accessToken: string, tenantId: string, 
     url.searchParams.set("where", sinceWhere);
     return fetch(url.toString(), {
       method: "GET",
-      headers: { Authorization: `Bearer ${accessToken}`, "Xero-tenant-id": tenantId, Accept: "application/json" },
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Xero-tenant-id": tenantId,
+        Accept: "application/json",
+      },
     });
   };
 
@@ -174,7 +201,10 @@ async function collectInvoiceContactData(accessToken: string, tenantId: string, 
       const items = inv.LineItems ?? [];
       if (Array.isArray(items) && items.length) {
         let set = descSets.get(id);
-        if (!set) { set = new Set<string>(); descSets.set(id, set); }
+        if (!set) {
+          set = new Set<string>();
+          descSets.set(id, set);
+        }
         for (const li of items) {
           const d = (li?.Description || "").toString().trim();
           if (d) set.add(d);
@@ -184,7 +214,11 @@ async function collectInvoiceContactData(accessToken: string, tenantId: string, 
       const ts = Date.parse(inv.Date ?? "") || 0;
       const prev = latestByContact.get(id);
       if (!prev || ts >= prev.ts) {
-        latestByContact.set(id, { ts, sent: inv.SentToContact ?? null, status: inv.Status ?? null });
+        latestByContact.set(id, {
+          ts,
+          sent: inv.SentToContact ?? null,
+          status: inv.Status ?? null,
+        });
       }
     }
     page += 1;
@@ -221,15 +255,23 @@ async function fetchContactsByIds(
   for (let i = 0; i < ids.length; i += batchSize) {
     const slice = ids.slice(i, i + batchSize);
     batchSizes.push(slice.length);
-    const url = `${XERO_CONTACTS_URL}?IDs=${slice.map(encodeURIComponent).join(",")}`;
+    const url = `${XERO_CONTACTS_URL}?IDs=${slice
+      .map(encodeURIComponent)
+      .join(",")}`;
 
     const resp = await fetch(url, {
       method: "GET",
-      headers: { Authorization: `Bearer ${accessToken}`, "Xero-tenant-id": tenantId, Accept: "application/json" },
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Xero-tenant-id": tenantId,
+        Accept: "application/json",
+      },
     });
     if (!resp.ok) {
       const text = await resp.text().catch(() => "");
-      throw new Error(`Failed contacts batch (${i}-${i + slice.length - 1}): ${resp.status} ${text}`);
+      throw new Error(
+        `Failed contacts batch (${i}-${i + slice.length - 1}): ${resp.status} ${text}`
+      );
     }
     const data = (await resp.json()) as XeroContactsResponse;
     if (data?.Contacts?.length) all.push(...data.Contacts);
@@ -243,8 +285,8 @@ async function upsertClientForBusiness(
   client: PoolClient,
   params: {
     businessId: string;
-    createdBy: string | null;            // <-- allow NULL if not a UUID
-    xeroContactId: string;               // must be UUID from Xero
+    createdBy: string | null; // <-- allow NULL if not a UUID
+    xeroContactId: string; // must be UUID from Xero
     nameIn: string;
     emailIn: string | null;
     phoneIn: string | null;
@@ -253,8 +295,14 @@ async function upsertClientForBusiness(
   }
 ): Promise<"inserted" | "updated"> {
   const {
-    businessId, createdBy, xeroContactId,
-    nameIn, emailIn, phoneIn, itemDescriptionIn, invoiceStatusIn,
+    businessId,
+    createdBy,
+    xeroContactId,
+    nameIn,
+    emailIn,
+    phoneIn,
+    itemDescriptionIn,
+    invoiceStatusIn,
   } = params;
 
   const name = (nameIn || "").trim() || "(Unknown Contact)";
@@ -300,23 +348,60 @@ async function upsertClientForBusiness(
       updated_at       = now()
     RETURNING (xmax = 0) AS inserted
     `,
-    [businessId, createdBy, name, email, phone, itemDesc, invoiceStatus, xeroContactId]
+    [
+      businessId,
+      createdBy,
+      name,
+      email,
+      phone,
+      itemDesc,
+      invoiceStatus,
+      xeroContactId,
+    ]
   );
 
   return ins.rows[0]?.inserted ? "inserted" : "updated";
 }
+
+/* ---------------- diagnostics shape ---------------- */
+type Diag = {
+  step: string;
+  tenantResolved: boolean;
+  tokenRefreshed: boolean;
+  invoices: { pagesFetched: number; perPageCounts: number[] };
+  contacts: { batches: number; batchSizes: number[] };
+  counts: {
+    contactIdsFromInvoices: number;
+    contactsFetched: number;
+    customersIncluded: number;
+    isCustomerTrue: number;
+    isCustomerFalse: number;
+    isCustomerNull: number;
+  };
+  samples: {
+    firstInvoiceContactIds: string[];
+    skippedNotCustomer: string[];
+    skippedMissingContact: string[];
+    upsertErrors: Array<{
+      contactId: string;
+      error: string;
+      createdByWasUuid?: boolean;
+    }>;
+  };
+  notes: string[];
+};
 
 /* ---------------- Route handler ---------------- */
 export async function POST(req: NextRequest) {
   const pool = getPool();
   const client = await pool.connect();
 
-  const diag: any = {
+  const diag: Diag = {
     step: "start",
     tenantResolved: false,
     tokenRefreshed: false,
-    invoices: { pagesFetched: 0, perPageCounts: [] as number[] },
-    contacts: { batches: 0, batchSizes: [] as number[] },
+    invoices: { pagesFetched: 0, perPageCounts: [] },
+    contacts: { batches: 0, batchSizes: [] },
     counts: {
       contactIdsFromInvoices: 0,
       contactsFetched: 0,
@@ -326,19 +411,26 @@ export async function POST(req: NextRequest) {
       isCustomerNull: 0,
     },
     samples: {
-      firstInvoiceContactIds: [] as string[],
-      skippedNotCustomer: [] as string[],
-      skippedMissingContact: [] as string[],
-      upsertErrors: [] as Array<{ contactId: string; error: string; createdByWasUuid?: boolean }>,
+      firstInvoiceContactIds: [],
+      skippedNotCustomer: [],
+      skippedMissingContact: [],
+      upsertErrors: [],
     },
-    notes: [] as string[],
+    notes: [],
   };
 
   try {
-    const body = (await req.json().catch(() => ({}))) as { businessId?: string; since?: string; date?: string };
+    const body = (await req.json().catch(() => ({}))) as {
+      businessId?: string;
+      since?: string;
+      date?: string;
+    };
     const businessId = body.businessId?.trim();
     if (!isUUID(businessId)) {
-      return NextResponse.json({ error: "INVALID_INPUT", message: "Valid businessId is required." }, { status: 400 });
+      return NextResponse.json(
+        { error: "INVALID_INPUT", message: "Valid businessId is required." },
+        { status: 400 }
+      );
     }
 
     // Auth → set app.user_id for RLS; store created_by only if it's a UUID
@@ -348,7 +440,10 @@ export async function POST(req: NextRequest) {
     await client.query(`SELECT set_config('app.user_id', $1, true)`, [userId]);
 
     const createdByUuid = isUUID(userId) ? userId : null;
-    if (!createdByUuid) diag.notes.push("created_by is not a UUID → storing NULL in clients.created_by");
+    if (!createdByUuid)
+      diag.notes.push(
+        "created_by is not a UUID → storing NULL in clients.created_by"
+      );
 
     // Build "since"
     let sinceWhere = DEFAULT_SINCE_WHERE;
@@ -357,8 +452,12 @@ export async function POST(req: NextRequest) {
       const built = buildSinceWhere(body?.since ?? body?.date);
       sinceWhere = built.where;
       sinceISO = built.sinceISO;
-    } catch (e: any) {
-      return NextResponse.json({ error: e?.message || "Invalid since date" }, { status: 400 });
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : String(e);
+      return NextResponse.json(
+        { error: message || "Invalid since date" },
+        { status: 400 }
+      );
     }
 
     // 1) Resolve tenant
@@ -382,7 +481,10 @@ export async function POST(req: NextRequest) {
       [businessId]
     );
     if (xr.rowCount === 0) {
-      return NextResponse.json({ error: "NO_XERO_CONNECTION", message: "No Xero connection for this business." }, { status: 404 });
+      return NextResponse.json(
+        { error: "NO_XERO_CONNECTION", message: "No Xero connection for this business." },
+        { status: 404 }
+      );
     }
     diag.tenantResolved = true;
     const detail = xr.rows[0];
@@ -402,14 +504,23 @@ export async function POST(req: NextRequest) {
         SET access_token = $1, refresh_token = $2, access_token_expires_at = $3, last_refreshed_at = NOW()
         WHERE id = $4
         `,
-        [access_token, refresh_token, nowPlus(refreshed.expires_in * 1000), detail.id]
+        [
+          access_token,
+          refresh_token,
+          nowPlus(refreshed.expires_in * 1000),
+          detail.id,
+        ]
       );
       diag.tokenRefreshed = true;
     }
 
     // 3) Discover contacts via invoices
     diag.step = "discover-invoices";
-    const discovered = await collectInvoiceContactData(access_token, tenantId, sinceWhere);
+    const discovered = await collectInvoiceContactData(
+      access_token,
+      tenantId,
+      sinceWhere
+    );
     const contactIds = discovered.ids;
     diag.invoices = discovered.diag;
     diag.counts.contactIdsFromInvoices = contactIds.length;
@@ -417,19 +528,35 @@ export async function POST(req: NextRequest) {
 
     if (contactIds.length === 0) {
       return NextResponse.json(
-        { businessId, tenantId, since: sinceISO, inserted: 0, updated: 0, consideredFromInvoices: 0, customersOnly: 0, totalClientsForBusiness: 0, diag },
+        {
+          businessId,
+          tenantId,
+          since: sinceISO,
+          inserted: 0,
+          updated: 0,
+          consideredFromInvoices: 0,
+          customersOnly: 0,
+          totalClientsForBusiness: 0,
+          diag,
+        },
         { status: 200 }
       );
     }
 
     // 4) Fetch full contacts
     diag.step = "fetch-contacts";
-    const { contacts, diag: contactsDiag } = await fetchContactsByIds(access_token, tenantId, contactIds);
+    const { contacts, diag: contactsDiag } = await fetchContactsByIds(
+      access_token,
+      tenantId,
+      contactIds
+    );
     diag.contacts = contactsDiag;
     diag.counts.contactsFetched = contacts.length;
 
     const contactMap = new Map<string, XeroContact>();
-    let isTrue = 0, isFalse = 0, isNull = 0;
+    let isTrue = 0,
+      isFalse = 0,
+      isNull = 0;
     for (const c of contacts) {
       const id = (c.ContactID || "").trim();
       if (!id) continue;
@@ -448,22 +575,38 @@ export async function POST(req: NextRequest) {
     let customersOnly = 0;
     const skippedNotCustomer: string[] = [];
     const skippedMissingContact: string[] = [];
-    const upsertErrors: Array<{ contactId: string; error: string; createdByWasUuid?: boolean }> = [];
+    const upsertErrors: Array<{
+      contactId: string;
+      error: string;
+      createdByWasUuid?: boolean;
+    }> = [];
 
     for (const id of contactIds) {
       const full = contactMap.get(id);
-      if (!full) { skippedMissingContact.push(id); continue; }
-      if (full.IsCustomer !== true) { skippedNotCustomer.push(id); continue; }
+      if (!full) {
+        skippedMissingContact.push(id);
+        continue;
+      }
+      if (full.IsCustomer !== true) {
+        skippedNotCustomer.push(id);
+        continue;
+      }
       customersOnly += 1;
 
       const xeroContactId = (full.ContactID || "").trim();
       if (!isUUID(xeroContactId)) {
         // We expect ContactID to be a GUID; if not, skip this contact.
-        upsertErrors.push({ contactId: id, error: "ContactID is not a UUID; skipping.", createdByWasUuid: !!createdByUuid });
+        upsertErrors.push({
+          contactId: id,
+          error: "ContactID is not a UUID; skipping.",
+          createdByWasUuid: !!createdByUuid,
+        });
         continue;
       }
 
-      const name = (full?.Name || discovered.names.get(id) || "").trim() || "(Unknown Contact)";
+      const name =
+        (full?.Name || discovered.names.get(id) || "").trim() ||
+        "(Unknown Contact)";
       const email = (full?.EmailAddress || null)?.toString() ?? null;
       const phone = pickPhone(full?.Phones) || null;
       const itemDescription = discovered.descriptions.get(id) || null;
@@ -480,9 +623,15 @@ export async function POST(req: NextRequest) {
           itemDescriptionIn: itemDescription,
           invoiceStatusIn: invoiceStatus,
         });
-        if (res === "inserted") inserted += 1; else updated += 1;
-      } catch (e: any) {
-        upsertErrors.push({ contactId: id, error: e?.message || "DB upsert failed", createdByWasUuid: !!createdByUuid });
+        if (res === "inserted") inserted += 1;
+        else updated += 1;
+      } catch (e: unknown) {
+        const message = e instanceof Error ? e.message : String(e);
+        upsertErrors.push({
+          contactId: id,
+          error: message || "DB upsert failed",
+          createdByWasUuid: !!createdByUuid,
+        });
       }
     }
 
@@ -512,12 +661,16 @@ export async function POST(req: NextRequest) {
 
     console.debug("[XERO DIAG] Completed sync", summary);
     if (upsertErrors.length) {
-      console.debug("[XERO DIAG] upsertErrors (first 10):", upsertErrors.slice(0, 10));
+      console.debug(
+        "[XERO DIAG] upsertErrors (first 10):",
+        upsertErrors.slice(0, 10)
+      );
     }
 
     return NextResponse.json(summary, { status: 200 });
-  } catch (err: any) {
-    console.error("[/api/xero/get-clients-from-xero] error:", err?.stack || err);
+  } catch (err: unknown) {
+    const e = err instanceof Error ? err : new Error(String(err));
+    console.error("[/api/xero/get-clients-from-xero] error:", e.stack ?? e);
     return NextResponse.json({ error: "SERVER_ERROR" }, { status: 500 });
   } finally {
     client.release();

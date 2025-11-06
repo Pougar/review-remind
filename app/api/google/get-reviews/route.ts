@@ -11,21 +11,84 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: true },
 });
 
-// ---- NEW: Google OAuth client creds (required for refresh)
+// ---- Google OAuth client creds (required for refresh)
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID!;
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET!;
+
+/* ---------------- Types ---------------- */
+
+interface HttpError extends Error {
+  code?: number;
+}
+
+interface GbpAccount {
+  name?: string;        // "accounts/123..."
+  accountName?: string; // human label
+}
+
+interface GbpLocation {
+  name?: string; // "locations/456..." or "accounts/123/locations/456"
+  title?: string;
+  profile?: { description?: string };
+  phoneNumbers?: { primaryPhone?: string };
+  websiteUri?: string;
+  metadata?: {
+    placeId?: string;
+    mapsUri?: string;
+    newReviewUri?: string;
+  };
+}
+
+type StarEnum = "ONE" | "TWO" | "THREE" | "FOUR" | "FIVE";
+
+interface GbpReview {
+  reviewId?: string;
+  reviewer?: { displayName?: string };
+  comment?: string;
+  starRating?: StarEnum;
+  createTime?: string; // ISO
+}
+
+interface ReviewsPage {
+  reviews: GbpReview[];
+  nextPageToken?: string;
+  averageRating?: number;
+  totalReviewCount?: number;
+}
+
+interface GoogleAccountRow {
+  id: string;
+  accessToken: string | null;
+  refreshToken: string | null;
+  accessTokenExpiresAt: string | null; // timestamptz as string
+}
+
+interface BizRow {
+  id: string;
+  user_id: string;
+  display_name: string | null;
+  google_review_link: string | null;
+  maps_url: string | null;
+  google_place_id: string | null;
+}
 
 /* ---------------- Utils ---------------- */
 
 function safeTrim(v: unknown): string | null {
-  if (!v || typeof v !== "string") return null;
+  if (typeof v !== "string") return null;
   const t = v.trim();
   return t.length ? t : null;
 }
 
-function starEnumToNumber(starRating?: string | null): number | null {
+function starEnumToNumber(starRating?: StarEnum | null): number | null {
   if (!starRating) return null;
-  const map: Record<string, number> = { ONE: 1, TWO: 2, THREE: 3, FOUR: 4, FIVE: 5 };
+  const map: Record<StarEnum, number> = {
+    ONE: 1,
+    TWO: 2,
+    THREE: 3,
+    FOUR: 4,
+    FIVE: 5,
+  };
   return map[starRating] ?? null;
 }
 
@@ -52,40 +115,41 @@ function parsePlaceIdFromReviewLink(urlStr?: string | null): string | null {
 
 /** Make sure the Reviews API parent is accounts/{acct}/locations/{loc} */
 function asReviewsParent(accountResource: string, locationName: string) {
-  if (locationName.startsWith("accounts/")) return locationName; // already full path
+  if (locationName.startsWith("accounts/")) return locationName;
   if (locationName.startsWith("locations/")) {
-    return `${accountResource}/${locationName}`; // accounts/{acct}/locations/{loc}
+    return `${accountResource}/${locationName}`;
   }
   return `${accountResource}/locations/${locationName.replace(/^\/+/, "")}`;
 }
 
 /* ---------------- Google calls (no persistence) ---------------- */
 
-async function gbpListAccounts(accessToken: string) {
+async function gbpListAccounts(accessToken: string): Promise<GbpAccount[]> {
   const r = await fetch("https://mybusinessaccountmanagement.googleapis.com/v1/accounts", {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
   const raw = await r.text().catch(() => "");
   console.log("[DEBUG][GBP] list accounts status=", r.status, "body=", raw);
   if (r.status === 401 || r.status === 403) {
-    const err: any = new Error("GBP_UNAUTHORIZED");
+    const err = new Error("GBP_UNAUTHORIZED") as HttpError;
     err.code = r.status;
     throw err;
   }
   if (!r.ok) {
-    const err: any = new Error(`GBP_ACCOUNTS_${r.status}`);
+    const err = new Error(`GBP_ACCOUNTS_${r.status}`) as HttpError;
     err.code = r.status;
     throw err;
   }
-  const data = raw ? JSON.parse(raw) : {};
-  return (data?.accounts ?? []) as Array<{ name?: string; accountName?: string }>;
+  const data: unknown = raw ? JSON.parse(raw) : {};
+  const accounts = (data as { accounts?: GbpAccount[] })?.accounts ?? [];
+  return accounts;
 }
 
 async function gbpListLocations(
   accessToken: string,
   accountResource: string,
   pageToken?: string
-) {
+): Promise<{ locations: GbpLocation[]; nextPageToken?: string }> {
   const readMask = [
     "name",
     "title",
@@ -109,24 +173,26 @@ async function gbpListLocations(
   const raw = await r.text().catch(() => "");
   console.log("[DEBUG][GBP] list locations status=", r.status, "body=", raw);
   if (r.status === 401 || r.status === 403) {
-    const err: any = new Error("GBP_UNAUTHORIZED");
+    const err = new Error("GBP_UNAUTHORIZED") as HttpError;
     err.code = r.status;
     throw err;
   }
   if (!r.ok) {
-    const err: any = new Error(`GBP_LOCATIONS_${r.status}`);
+    const err = new Error(`GBP_LOCATIONS_${r.status}`) as HttpError;
     err.code = r.status;
     throw err;
   }
-  const data = raw ? JSON.parse(raw) : {};
-  return { locations: data?.locations ?? [], nextPageToken: data?.nextPageToken ?? undefined };
+  const data: unknown = raw ? JSON.parse(raw) : {};
+  const locations = (data as { locations?: GbpLocation[] })?.locations ?? [];
+  const nextPageToken = (data as { nextPageToken?: string })?.nextPageToken ?? undefined;
+  return { locations, nextPageToken };
 }
 
 async function fetchReviewsPage(
   accessToken: string,
   parentLocationResource: string, // MUST be accounts/{acct}/locations/{loc}
   pageToken?: string
-) {
+): Promise<ReviewsPage> {
   const base = `https://mybusiness.googleapis.com/v4/${parentLocationResource}/reviews`;
   const url = new URL(base);
   url.searchParams.set("pageSize", "50");
@@ -137,37 +203,37 @@ async function fetchReviewsPage(
   console.log("[DEBUG][GBP] reviews status=", r.status, "body=", raw);
 
   if (r.status === 401 || r.status === 403) {
-    const err: any = new Error("GBP_REVIEWS_UNAUTHORIZED");
+    const err = new Error("GBP_REVIEWS_UNAUTHORIZED") as HttpError;
     err.code = r.status;
     throw err;
   }
   if (!r.ok) {
-    const err: any = new Error(`GBP_REVIEWS_${r.status}`);
+    const err = new Error(`GBP_REVIEWS_${r.status}`) as HttpError;
     err.code = r.status;
     throw err;
   }
-  const data = raw ? JSON.parse(raw) : {};
+  const data: unknown = raw ? JSON.parse(raw) : {};
   return {
-    reviews: data?.reviews ?? [],
-    nextPageToken: data?.nextPageToken ?? undefined,
-    averageRating: data?.averageRating ?? undefined,
-    totalReviewCount: data?.totalReviewCount ?? undefined,
+    reviews: (data as { reviews?: GbpReview[] })?.reviews ?? [],
+    nextPageToken: (data as { nextPageToken?: string })?.nextPageToken ?? undefined,
+    averageRating:
+      (data as { averageRating?: number })?.averageRating ?? undefined,
+    totalReviewCount:
+      (data as { totalReviewCount?: number })?.totalReviewCount ?? undefined,
   };
 }
 
 /* ---------------- NEW: token refresh helper ---------------- */
 
-type GoogleAccountRow = {
-  id: string;
-  accessToken: string | null;
-  refreshToken: string | null;
-  expiresAt: string | null; // timestamptz as string
-};
-
-async function ensureGoogleAccessTokenFor(userId: string): Promise<
+type EnsureTokenOk =
   | { ok: true; accessToken: string }
-  | { ok: false; reason: "NO_ACCESS_TOKEN" | "NO_REFRESH_TOKEN" | "REFRESH_FAILED"; debug?: any }
-> {
+  | {
+      ok: false;
+      reason: "NO_ACCESS_TOKEN" | "NO_REFRESH_TOKEN" | "REFRESH_FAILED";
+      debug?: unknown;
+    };
+
+async function ensureGoogleAccessTokenFor(userId: string): Promise<EnsureTokenOk> {
   if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) {
     return { ok: false, reason: "REFRESH_FAILED", debug: "Missing GOOGLE_CLIENT_ID/SECRET" };
   }
@@ -186,8 +252,8 @@ async function ensureGoogleAccessTokenFor(userId: string): Promise<
   const acct = rows[0];
   if (!acct?.accessToken) return { ok: false, reason: "NO_ACCESS_TOKEN" };
 
-  const expMs = acct.expiresAt ? new Date(acct.expiresAt).getTime() : 0;
-  const needsRefresh = !expMs || Date.now() >= expMs - 60_000; // refresh if unknown or <60s left
+  const expMs = acct.accessTokenExpiresAt ? new Date(acct.accessTokenExpiresAt).getTime() : 0;
+  const needsRefresh = !expMs || Date.now() >= expMs - 60_000;
 
   if (!needsRefresh) {
     return { ok: true, accessToken: acct.accessToken };
@@ -206,13 +272,22 @@ async function ensureGoogleAccessTokenFor(userId: string): Promise<
     }),
   });
 
-  const json = await rsp.json().catch(() => ({}));
-  if (!rsp.ok || !json?.access_token) {
+  let json: unknown = {};
+  try {
+    json = await rsp.json();
+  } catch {
+    /* ignore */
+  }
+
+  const access_token = (json as { access_token?: string })?.access_token;
+  const expires_in = Number((json as { expires_in?: number })?.expires_in ?? 3600);
+
+  if (!rsp.ok || !access_token) {
     return { ok: false, reason: "REFRESH_FAILED", debug: json };
   }
 
-  const newAccess = json.access_token as string;
-  const newExpMs = Date.now() + (Number(json.expires_in ?? 3600) * 1000);
+  const newAccess = access_token;
+  const newExpMs = Date.now() + expires_in * 1000;
 
   await pool.query(
     `UPDATE auth.account SET "accessToken"=$1, "accessTokenExpiresAt"=to_timestamp($2/1000.0) WHERE "id"=$3`,
@@ -227,12 +302,12 @@ async function ensureGoogleAccessTokenFor(userId: string): Promise<
 async function upsertOneReviewByBusiness(
   client: PoolClient,
   businessId: string,
-  r: any
-) {
+  r: GbpReview
+): Promise<void> {
   const google_review_id = r.reviewId ?? null;
   const author_name = safeTrim(r.reviewer?.displayName) ?? null;
   const review_txt = safeTrim(r.comment) ?? null;
-  const stars_num = starEnumToNumber(r.starRating);
+  const stars_num = starEnumToNumber(r.starRating ?? null);
   const published_at = r.createTime ? new Date(r.createTime) : null;
 
   await client.query(
@@ -255,6 +330,8 @@ async function upsertOneReviewByBusiness(
 
 /* ---------------- Route ---------------- */
 
+type ReqBody = { business_id?: string };
+
 export async function POST(req: NextRequest) {
   let client: PoolClient | null = null;
 
@@ -270,8 +347,14 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const body = await req.json().catch(() => ({} as any));
-    const businessId: string | undefined = body?.business_id;
+    let parsed: unknown;
+    try {
+      parsed = await req.json();
+    } catch {
+      parsed = {};
+    }
+    const body = (parsed ?? {}) as ReqBody;
+    const businessId: string | undefined = body.business_id;
     if (!businessId) {
       return NextResponse.json(
         { error: "BAD_REQUEST", message: "business_id is required in body." },
@@ -279,14 +362,21 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // ---- NEW: ensure we have a fresh Google access token (refresh if needed)
+    // Ensure we have a fresh Google access token (refresh if needed)
     const tokenResult = await ensureGoogleAccessTokenFor(sessionUserId);
     if (!tokenResult.ok) {
-      const map = {
+      const map: Record<
+        EnsureTokenOk extends infer T
+          ? T extends { ok: false; reason: infer R }
+            ? R & string
+            : never
+          : never,
+        [number, string]
+      > = {
         NO_ACCESS_TOKEN: [400, "Reconnect Google to continue."],
         NO_REFRESH_TOKEN: [400, "Reconnect Google with offline access to continue."],
         REFRESH_FAILED: [401, "Google token expired and refresh failed. Reconnect Google."],
-      } as const;
+      };
       const [status, msg] = map[tokenResult.reason] ?? [400, "Could not obtain Google token."];
       return NextResponse.json(
         { error: tokenResult.reason, message: msg, debug: tokenResult.debug ?? null },
@@ -300,7 +390,7 @@ export async function POST(req: NextRequest) {
     await client.query(`SELECT set_config('app.user_id', $1, true)`, [sessionUserId]);
 
     // Verify ownership + fetch hints
-    const bizRow = await client.query(
+    const bizRow = await client.query<BizRow>(
       `
       SELECT id, user_id, display_name, google_review_link, maps_url, google_place_id
       FROM public.businesses
@@ -317,10 +407,10 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const displayName = bizRow.rows[0].display_name as string | null;
+    const displayName = bizRow.rows[0].display_name;
     const hintPlaceId =
-      (bizRow.rows[0].google_place_id as string | null) ??
-      parsePlaceIdFromReviewLink(bizRow.rows[0].google_review_link as string | null);
+      bizRow.rows[0].google_place_id ??
+      parsePlaceIdFromReviewLink(bizRow.rows[0].google_review_link);
 
     // Discover a valid Reviews parent without touching integrations.google_locations
     const accounts = await gbpListAccounts(accessToken);
@@ -333,24 +423,23 @@ export async function POST(req: NextRequest) {
     }
 
     let chosenResource: string | null = null;
-    let chosenAccount: string | null = null;
 
     for (const acct of accounts) {
-      const acctName = acct.name!; // "accounts/1092..."
+      const acctName = String(acct.name); // "accounts/1092..."
       let pageToken: string | undefined;
 
       do {
         const page = await gbpListLocations(accessToken, acctName, pageToken);
-        const locs = page.locations || [];
+        const locs: GbpLocation[] = page.locations;
 
-        let candidate =
+        let candidate: GbpLocation | undefined =
           hintPlaceId
-            ? locs.find((l: any) => l?.metadata?.placeId === hintPlaceId)
-            : null;
+            ? locs.find((l) => l?.metadata?.placeId === hintPlaceId)
+            : undefined;
 
         if (!candidate && displayName) {
           const want = slugifyLoose(displayName);
-          candidate = locs.find((l: any) => slugifyLoose(String(l?.title || "")) === want);
+          candidate = locs.find((l) => slugifyLoose(String(l?.title || "")) === want);
         }
 
         if (!candidate && locs.length) {
@@ -359,8 +448,7 @@ export async function POST(req: NextRequest) {
 
         if (candidate?.name) {
           chosenResource = asReviewsParent(acctName, String(candidate.name));
-          chosenAccount = acctName;
-          console.log("[DEBUG][GBP] chosen reviews parent =", chosenResource, "acct=", chosenAccount);
+          console.log("[DEBUG][GBP] chosen reviews parent =", chosenResource, "acct=", acctName);
           break;
         }
 
@@ -382,7 +470,7 @@ export async function POST(req: NextRequest) {
     }
 
     // Fetch all reviews
-    const all: any[] = [];
+    const all: GbpReview[] = [];
     let averageRating: number | undefined;
     let totalReviewCount: number | undefined;
     let pageToken: string | undefined;
@@ -399,8 +487,9 @@ export async function POST(req: NextRequest) {
         if (page.reviews?.length) all.push(...page.reviews);
         pageToken = page.nextPageToken;
       } while (pageToken);
-    } catch (err: any) {
-      if (err?.code === 401 || err?.code === 403 || err?.message === "GBP_REVIEWS_UNAUTHORIZED") {
+    } catch (err: unknown) {
+      const e = err as HttpError | Error;
+      if ((e as HttpError)?.code === 401 || (e as HttpError)?.code === 403 || e.message === "GBP_REVIEWS_UNAUTHORIZED") {
         await client.query("ROLLBACK");
         return NextResponse.json(
           {
@@ -416,7 +505,7 @@ export async function POST(req: NextRequest) {
         {
           error: "GBP_FETCH_FAILED",
           message: "Could not fetch reviews from Google Business Profile.",
-          debug: { code: err?.code ?? null, message: err?.message ?? null },
+          debug: { code: (e as HttpError)?.code ?? null, message: e.message ?? null },
         },
         { status: 502 }
       );
@@ -437,16 +526,20 @@ export async function POST(req: NextRequest) {
       },
       { status: 200 }
     );
-  } catch (e: any) {
+  } catch (e: unknown) {
     try {
       await client?.query("ROLLBACK");
-    } catch {}
-    console.error("[FATAL]/api/google/get-reviews(business):", e?.message, e?.stack);
+    } catch {
+      /* ignore */
+    }
+    const msg = e instanceof Error ? e.message : String(e);
+    const stack = e instanceof Error ? e.stack : undefined;
+    console.error("[FATAL]/api/google/get-reviews(business):", msg, stack);
     return NextResponse.json(
       { error: "INTERNAL", message: "Could not sync Google reviews." },
       { status: 500 }
     );
   } finally {
-    client?.release?.();
+    client?.release();
   }
 }

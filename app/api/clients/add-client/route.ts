@@ -1,30 +1,60 @@
 // app/api/clients/add-client/route.ts
 import "server-only";
 import { NextRequest, NextResponse } from "next/server";
-import { Pool } from "pg";
+import { Pool, type PoolClient } from "pg";
 import { auth } from "@/app/lib/auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-// Reuse a single pool per process
+// Reuse a single pool per process (typed, no `any`)
+const globalForPg = globalThis as unknown as { __pgPool?: Pool };
 const pool =
-  (globalThis as any).__pgPool ??
+  globalForPg.__pgPool ??
   new Pool({
     connectionString: (process.env.DATABASE_URL || "").trim(),
     ssl: { rejectUnauthorized: true },
   });
-(globalThis as any).__pgPool = pool;
+globalForPg.__pgPool = pool;
 
 type Sentiment = "good" | "bad" | "unreviewed";
+
+type Body = {
+  businessId?: string;
+  name?: string;
+  email?: string | null;
+  phone_number?: string | null;
+  initialSentiment?: Sentiment;
+  initialReview?: string | null;
+};
+
+type ClientRow = {
+  id: string;
+  business_id: string;
+  created_by: string;
+  display_name: string;
+  email: string | null;
+  phone_number: string | null;
+  sentiment: Sentiment | null;
+  created_at: string;
+  updated_at: string;
+};
 
 function isValidEmail(str?: string | null) {
   if (!str) return true; // allow empty/null
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(str);
 }
 
+async function readJson<T>(req: NextRequest): Promise<T | null> {
+  try {
+    return (await req.json()) as unknown as T;
+  } catch {
+    return null;
+  }
+}
+
 export async function POST(req: NextRequest) {
-  let db;
+  let db: PoolClient | null = null;
   try {
     // ---- Auth (BetterAuth) ----
     const session = await auth.api.getSession({ headers: req.headers });
@@ -34,22 +64,15 @@ export async function POST(req: NextRequest) {
     }
 
     // ---- Parse & validate ----
-    const body = await req.json().catch(() => ({}));
+    const body = (await readJson<Body>(req)) ?? {};
     const {
       businessId,
-      name,                 // UI sends as `name`
+      name, // UI sends as `name`
       email,
       phone_number,
       initialSentiment,
       initialReview,
-    } = (body ?? {}) as {
-      businessId?: string;
-      name?: string;
-      email?: string | null;
-      phone_number?: string | null;
-      initialSentiment?: Sentiment;
-      initialReview?: string | null;
-    };
+    } = body;
 
     if (!businessId) {
       return NextResponse.json({ error: "MISSING_BUSINESS_ID" }, { status: 400 });
@@ -85,7 +108,7 @@ export async function POST(req: NextRequest) {
     const clientId = crypto.randomUUID();
 
     // clients.display_name is the correct column (not `name`)
-    const ins = await db.query(
+    const ins = await db.query<ClientRow>(
       `
         INSERT INTO public.clients
           (id, business_id, created_by, display_name, email, phone_number, sentiment)
@@ -121,9 +144,14 @@ export async function POST(req: NextRequest) {
 
     await db.query("COMMIT");
     return NextResponse.json({ success: true, client: clientRow });
-  } catch (e) {
-    try { await db?.query("ROLLBACK"); } catch {}
-    console.error("[POST /api/clients/add-client] error:", e);
+  } catch (e: unknown) {
+    try {
+      await db?.query("ROLLBACK");
+    } catch {
+      /* ignore */
+    }
+    const msg = e instanceof Error ? e.stack ?? e.message : String(e);
+    console.error("[POST /api/clients/add-client] error:", msg);
     return NextResponse.json({ error: "INTERNAL" }, { status: 500 });
   } finally {
     db?.release();

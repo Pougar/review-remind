@@ -2,13 +2,17 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useParams, useRouter, useSearchParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { authClient } from "@/app/lib/auth-client";
 import { API, ROUTES } from "@/app/lib/constants";
 
+type HasConnectionResp = {
+  connected?: boolean;
+  scopeOk?: boolean;
+};
+
 export default function LinkGooglePage() {
   const router = useRouter();
-  const search = useSearchParams();
   const params = useParams();
 
   // [slug] is the USER slug
@@ -39,9 +43,16 @@ export default function LinkGooglePage() {
         `${API.GOOGLE_HAS_CONNECTION}?betterauth_id=${encodeURIComponent(userId)}`,
         { method: "GET", credentials: "include", cache: "no-store" }
       );
-      const data = await res.json().catch(() => ({} as any));
-      const connected = !!data?.connected;
-      const scopeOk = !!data?.scopeOk;
+
+      let data: HasConnectionResp;
+      try {
+        data = (await res.json()) as HasConnectionResp;
+      } catch {
+        data = {};
+      }
+
+      const connected = !!data.connected;
+      const scopeOk = !!data.scopeOk;
 
       if (connected && scopeOk) {
         setStatusMsg("Google connected with Business Profile access ✓");
@@ -51,8 +62,8 @@ export default function LinkGooglePage() {
         setStatusMsg("Not connected yet.");
       }
       return { connected, scopeOk };
-    } catch (e: any) {
-      setStatusMsg(e?.message || "Could not verify Google connection.");
+    } catch (e: unknown) {
+      setStatusMsg(e instanceof Error ? e.message : "Could not verify Google connection.");
       return { connected: false, scopeOk: false };
     } finally {
       setChecking(false);
@@ -192,7 +203,7 @@ export default function LinkGooglePage() {
             Connect Google Business
           </button>
 
-        {/* “Recheck” + back */}
+          {/* “Recheck” + back */}
           <div className="flex items-center gap-3 text-sm">
             <button
               type="button"

@@ -1,26 +1,22 @@
 // app/api/businesses/get-name-from-id/route.ts
 import { NextRequest, NextResponse } from "next/server";
-import { Pool } from "pg";
+import { Pool, PoolClient } from "pg";
 import { auth } from "@/app/lib/auth";
 
-/** ---------- PG Pool (singleton across hot reloads) ---------- */
-declare global {
-  // eslint-disable-next-line no-var
-  var _pgPoolGetBizNameFromId: Pool | undefined;
-}
-
+/** ---------- PG Pool (singleton across hot reloads; no eslint-disable, no `any`) ---------- */
+const globalForPg = globalThis as unknown as { _pgPoolGetBizNameFromId?: Pool };
 function getPool(): Pool {
-  if (!global._pgPoolGetBizNameFromId) {
+  if (!globalForPg._pgPoolGetBizNameFromId) {
     const cs = process.env.DATABASE_URL;
     if (!cs) throw new Error("DATABASE_URL is not set");
-    global._pgPoolGetBizNameFromId = new Pool({
+    globalForPg._pgPoolGetBizNameFromId = new Pool({
       connectionString: cs,
       // Neon / managed PG often requires SSL
       ssl: { rejectUnauthorized: true },
       max: 5,
     });
   }
-  return global._pgPoolGetBizNameFromId;
+  return globalForPg._pgPoolGetBizNameFromId;
 }
 
 export const runtime = "nodejs";
@@ -32,11 +28,21 @@ type ReqBody = {
   userId?: string;
 };
 
+type NameRow = { display_name: string };
+
 const isNonEmpty = (v?: string) => typeof v === "string" && v.trim().length > 0;
+
+async function readJson<T>(req: NextRequest): Promise<T | null> {
+  try {
+    return (await req.json()) as unknown as T;
+  } catch {
+    return null;
+  }
+}
 
 export async function POST(req: NextRequest) {
   try {
-    const body = (await req.json().catch(() => ({}))) as ReqBody;
+    const body = (await readJson<ReqBody>(req)) ?? {};
 
     // Resolve user id from body or session
     let userId = (body.userId ?? "").trim();
@@ -58,15 +64,16 @@ export async function POST(req: NextRequest) {
     }
 
     const pool = getPool();
-    const client = await pool.connect();
+    let client: PoolClient | null = null;
 
     try {
+      client = await pool.connect();
       await client.query("BEGIN");
       // Ensure RLS applies for this user
       await client.query(`select set_config('app.user_id', $1, true)`, [userId]);
 
       // Under RLS, this will only return a row if the requester owns the business
-      const q = await client.query<{ display_name: string }>(
+      const q = await client.query<NameRow>(
         `
           select display_name
           from public.businesses
@@ -93,14 +100,17 @@ export async function POST(req: NextRequest) {
       );
     } catch (err) {
       try {
-        await client.query("ROLLBACK");
-      } catch {}
+        if (client) await client.query("ROLLBACK");
+      } catch {
+        /* ignore */
+      }
       throw err;
     } finally {
-      client.release();
+      if (client) client.release();
     }
-  } catch (err: any) {
-    console.error("[/api/businesses/get-name-from-id] error:", err?.stack || err);
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.stack ?? err.message : String(err);
+    console.error("[/api/businesses/get-name-from-id] error:", msg);
     return NextResponse.json({ success: false, error: "SERVER_ERROR" }, { status: 500 });
   }
 }

@@ -6,18 +6,23 @@ import { verifyMagicToken } from "@/app/lib/magic-token";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+/* ---------- PG Pool (singleton across HMR) ---------- */
+declare global {
+  // eslint-disable-next-line no-var
+  var __pgPoolPublicBusiness: Pool | undefined;
+}
+
 const pool =
-  (globalThis as any).__pgPoolPublicBusiness ??
+  globalThis.__pgPoolPublicBusiness ??
   new Pool({
     connectionString: process.env.DATABASE_URL,
     ssl: { rejectUnauthorized: false },
     max: 5,
   });
-(globalThis as any).__pgPoolPublicBusiness = pool;
+globalThis.__pgPoolPublicBusiness = pool;
 
 /* ------------------ Helpers ------------------ */
-const isUUID = (v?: string | null) =>
-  !!v && /^[0-9a-fA-F-]{36}$/.test(v);
+const isUUID = (v?: string | null) => !!v && /^[0-9a-fA-F-]{36}$/.test(v);
 
 // ✅ new: allow "test"
 const isClientIdPublicValid = (cid?: string | null) => {
@@ -41,10 +46,7 @@ function forbidden(message: string) {
 }
 
 function serverError(message = "Could not load business details.") {
-  return NextResponse.json(
-    { error: "INTERNAL", message },
-    { status: 500 }
-  );
+  return NextResponse.json({ error: "INTERNAL", message }, { status: 500 });
 }
 
 const SQL_GET_BUSINESS = `
@@ -69,8 +71,8 @@ export async function POST(req: NextRequest) {
   };
 
   const businessId = body.businessId?.trim() || "";
-  const clientId   = body.clientId?.trim() || "";
-  const token      = body.token?.trim() || "";
+  const clientId = body.clientId?.trim() || "";
+  const token = body.token?.trim() || "";
 
   // validate
   if (!isUUID(businessId)) {
@@ -136,8 +138,8 @@ export async function GET(req: NextRequest) {
   const url = new URL(req.url);
 
   const businessId = (url.searchParams.get("businessId") ?? "").trim();
-  const clientId   = (url.searchParams.get("clientId") ?? "").trim();
-  const token      = (url.searchParams.get("token") ?? "").trim();
+  const clientId = (url.searchParams.get("clientId") ?? "").trim();
+  const token = (url.searchParams.get("token") ?? "").trim();
 
   if (!isUUID(businessId)) {
     return badRequest("Valid businessId is required.", { field: "businessId" });

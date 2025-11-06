@@ -31,6 +31,18 @@ function BackgroundSea() {
   );
 }
 
+// Safe error-to-string helper
+function errorMsg(e: unknown): string {
+  if (e instanceof Error) return e.message;
+  if (typeof e === "string") return e;
+  try {
+    return JSON.stringify(e);
+  } catch {
+    return "Unknown error";
+  }
+}
+
+
 /* ======================== Stars + Mini Review Card ======================== */
 function Star({
   className = "",
@@ -233,72 +245,73 @@ export default function SignUpPage() {
   };
 
   const handleSignUpSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    setError("");
-    if (disabled) return;
+  e.preventDefault();
+  setError("");
+  if (disabled) return;
 
-    const cleanEmail = email.trim().toLowerCase();
-    const cleanName  = username.trim();
+  const cleanEmail = email.trim().toLowerCase();
+  const cleanName  = username.trim();
 
-    setLoading(true);
-    try {
-      const { error: signUpErr } = await authClient.signUp.email(
-        { email: cleanEmail, password, name: cleanName },
-        {
-          onSuccess: async (ctx) => {
-            const user = ctx.data?.user;
-            if (!user?.id) {
-              setError("Unexpected error finalizing your account.");
-              setLoading(false);
-              return;
-            }
-            // ✅ Create/find myusers row and get slug in one step
-            try {
-              const r = await fetch(API.SIGN_UP, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ id: user.id, email: cleanEmail, name: cleanName }),
-              });
-              if (!r.ok) {
-                const msg = await r.text().catch(() => "");
-                throw new Error(msg || "Could not finalize your account.");
-              }
-              const { slug } = (await r.json()) as { slug?: string };
-
-              const b = await fetch(API.RECORD_SIGN_UP, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ userId: user.id }),
-              });
-              if (!b.ok) {
-                const msg = await b.text().catch(() => "");
-                throw new Error(msg || "Could not finalize your account.");
-              }
-
-              redirectToDashboard(slug);
-            } catch (e: any) {
-              // As a safety, still go to /dashboard (server route can re-resolve)
-              redirectToDashboard();
-            } finally {
-              setLoading(false);
-            }
-          },
-          onError: (ctx) => {
-            setError(ctx.error?.message || "Sign up failed. Please try again.");
+  setLoading(true);
+  try {
+    const { error: signUpErr } = await authClient.signUp.email(
+      { email: cleanEmail, password, name: cleanName },
+      {
+        onSuccess: async (ctx) => {
+          const user = ctx.data?.user;
+          if (!user?.id) {
+            setError("Unexpected error finalizing your account.");
             setLoading(false);
-          },
-        }
-      );
+            return;
+          }
+          // ✅ Create/find myusers row and get slug in one step
+          try {
+            const r = await fetch(API.SIGN_UP, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ id: user.id, email: cleanEmail, name: cleanName }),
+            });
+            if (!r.ok) {
+              const msg = await r.text().catch(() => "");
+              throw new Error(msg || "Could not finalize your account.");
+            }
+            const { slug } = (await r.json()) as { slug?: string };
 
-      if (signUpErr) {
-        setError(signUpErr.message || "Sign up failed. Please try again.");
+            const b = await fetch(API.RECORD_SIGN_UP, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ userId: user.id }),
+            });
+            if (!b.ok) {
+              const msg = await b.text().catch(() => "");
+              throw new Error(msg || "Could not finalize your account.");
+            }
+
+            redirectToDashboard(slug);
+          } catch (_err: unknown) {
+            // Safety fallback — still go to /dashboard (server can re-resolve)
+            redirectToDashboard();
+          } finally {
+            setLoading(false);
+          }
+        },
+        onError: (ctx) => {
+          setError(ctx.error?.message || "Sign up failed. Please try again.");
+          setLoading(false);
+        },
       }
-    } catch (err: any) {
-      setError(err?.message || "Network error. Please try again.");
-    } finally {
-      setLoading(false);
+    );
+
+    if (signUpErr) {
+      setError(signUpErr.message || "Sign up failed. Please try again.");
     }
-  };
+  } catch (err: unknown) {
+    setError(errorMsg(err));
+  } finally {
+    setLoading(false);
+  }
+};
+
 
   return (
     <main className="min-h-screen w-full grid grid-cols-1 lg:grid-cols-2">

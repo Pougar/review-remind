@@ -84,8 +84,8 @@ export default function AddBusinessLayout({ children }: { children: React.ReactN
         default:
           break;
       }
-    } catch (e: any) {
-      setErr(e?.message || "Could not check onboarding stage.");
+    } catch (e: unknown) {
+      setErr(e instanceof Error ? e.message : "Could not check onboarding stage.");
     } finally {
       setChecking(false);
     }

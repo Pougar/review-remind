@@ -1,3 +1,4 @@
+// app/dashboard/[slug]/[bslug]/page.tsx
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
@@ -22,6 +23,32 @@ type RecentReview = {
   updated_at: string | null;
 };
 
+type BizIdResp = { business_id?: string; id?: string; message?: string };
+type BizNameResp = {
+  display_name?: string;
+  name?: string;
+  business?: { display_name?: string; name?: string };
+  error?: string;
+};
+type ApiRecentReview = {
+  review_id?: string;
+  client_id?: string | null;
+  client_name?: string | null;
+  is_primary?: "google" | "internal" | string;
+  sentiment?: boolean | null;
+  stars?: number | null;
+  review?: string;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+type ReviewsGetRecentResp = { reviews?: ApiRecentReview[] } | ApiRecentReview[];
+type SyncResp = { message?: string; total_reviews_returned?: number };
+
+/* Small helper: safe typed JSON */
+async function safeJson<T>(res: Response): Promise<T> {
+  return (await res.json().catch(() => ({}))) as T;
+}
+
 export default function DashboardPage() {
   const { name: userSlug, display } = useUser();
   const params = useParams() as { slug?: string; bslug?: string };
@@ -39,14 +66,12 @@ export default function DashboardPage() {
   // Tutorial modal state (always available via bottom button)
   const [showTutorial, setShowTutorial] = useState(false);
 
-  // Banner state: hide when user is >= 1 week old
-  const [hideTutorialBanner, setHideTutorialBanner] = useState(true);
+  // Banner state: hide when user is >= 1 week old (setter unused → drop it)
+  const [hideTutorialBanner] = useState(true);
   const bannerVisible = !hideTutorialBanner;
 
   // --- Resolve business_id from slug (if ?bid not provided) ---
-  const [resolvedBusinessId, setResolvedBusinessId] = useState<string | null>(
-    businessId
-  );
+  const [resolvedBusinessId, setResolvedBusinessId] = useState<string | null>(businessId);
   const [bizIdLoading, setBizIdLoading] = useState(false);
   const [bizIdErr, setBizIdErr] = useState<string | null>(null);
 
@@ -70,11 +95,9 @@ export default function DashboardPage() {
           body: JSON.stringify({ userId, businessSlug }),
           cache: "no-store",
         });
-        const data = await res.json().catch(() => ({} as any));
+        const data = await safeJson<BizIdResp>(res);
         if (!res.ok) {
-          throw new Error(
-            data?.message || `Failed to resolve business id (${res.status})`
-          );
+          throw new Error(data?.message || `Failed to resolve business id (${res.status})`);
         }
         const id: string | undefined = data?.business_id || data?.id;
         if (!id) throw new Error("Could not resolve business id from slug.");
@@ -82,9 +105,10 @@ export default function DashboardPage() {
           setResolvedBusinessId(String(id));
           setBizIdErr(null);
         }
-      } catch (e: any) {
+      } catch (e: unknown) {
         if (alive) {
-          setBizIdErr(e?.message || "Failed to resolve business id.");
+          const msg = e instanceof Error ? e.message : "Failed to resolve business id.";
+          setBizIdErr(msg);
           setResolvedBusinessId(null);
         }
       } finally {
@@ -117,7 +141,7 @@ export default function DashboardPage() {
           cache: "no-store",
           body: JSON.stringify({ businessId: bid }),
         });
-        const data = await res.json().catch(() => ({} as any));
+        const data = await safeJson<BizNameResp>(res);
         if (!res.ok) throw new Error(data?.error || "Failed to fetch business name");
         const name =
           data?.display_name ??
@@ -165,41 +189,34 @@ export default function DashboardPage() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           // Prefer businessId (when available via ?bid=…), else send businessSlug.
-          body: JSON.stringify(
-            businessId
-              ? { userId, businessId }
-              : { userId, businessSlug }
-          ),
+          body: JSON.stringify(businessId ? { userId, businessId } : { userId, businessSlug }),
           cache: "no-store",
         });
         if (!res.ok) throw new Error(`Failed to load reviews (${res.status})`);
 
-        const data = await res.json().catch(() => ({} as any));
-        const list: RecentReview[] = Array.isArray(data?.reviews)
-          ? data.reviews.map((r: any): RecentReview => ({
-              review_id: String(r.review_id ?? ""),
-              client_id: r.client_id ?? null,
-              client_name:
-                typeof r.client_name === "string" ? r.client_name : null,
-              is_primary:
-                (r.is_primary === "google" ? "google" : "internal") as
-                  | "google"
-                  | "internal",
-              sentiment:
-                typeof r.sentiment === "boolean" ? r.sentiment : null,
-              stars: Number.isFinite(r.stars) ? Number(r.stars) : null,
-              review: String(r.review ?? ""),
-              created_at: r.created_at ?? null,
-              updated_at: r.updated_at ?? null,
-            }))
-          : [];
+        const data = await safeJson<ReviewsGetRecentResp>(res);
+        const arr: ApiRecentReview[] = Array.isArray(data) ? data : data.reviews ?? [];
+        const list: RecentReview[] = arr.map((r): RecentReview => ({
+          review_id: String(r.review_id ?? ""),
+          client_id: r.client_id ?? null,
+          client_name: typeof r.client_name === "string" ? r.client_name : null,
+          is_primary: (r.is_primary === "google" ? "google" : "internal") as "google" | "internal",
+          sentiment: typeof r.sentiment === "boolean" ? r.sentiment : null,
+          stars: Number.isFinite(r.stars as number) ? Number(r.stars) : null,
+          review: String(r.review ?? ""),
+          created_at: r.created_at ?? null,
+          updated_at: r.updated_at ?? null,
+        }));
 
         if (alive) {
           setRecent(list);
           setPage(0);
         }
-      } catch (e: any) {
-        if (alive) setRvErr(e?.message || "Failed to load recent reviews.");
+      } catch (e: unknown) {
+        if (alive) {
+          const msg = e instanceof Error ? e.message : "Failed to load recent reviews.";
+          setRvErr(msg);
+        }
       } finally {
         if (alive) setRvLoading(false);
       }
@@ -235,26 +252,24 @@ export default function DashboardPage() {
         cache: "no-store",
       });
 
-      const data = await res.json().catch(() => ({} as any));
+      const data = await safeJson<SyncResp>(res);
 
       if (!res.ok) {
         throw new Error(data?.message || `Failed to sync reviews (${res.status})`);
       }
 
-      const n = Number.isFinite(data?.total_reviews_returned)
-        ? Number(data.total_reviews_returned)
-        : null;
+      const n =
+        typeof data?.total_reviews_returned === "number"
+          ? data.total_reviews_returned
+          : null;
 
-      setSyncOk(
-        n != null
-          ? `Synced ${n} review${n === 1 ? "" : "s"} from Google.`
-          : "Synced reviews from Google."
-      );
+      setSyncOk(n != null ? `Synced ${n} review${n === 1 ? "" : "s"} from Google.` : "Synced reviews from Google.");
 
       // Refresh recent reviews panel
       setRefreshTick((t) => t + 1);
-    } catch (e: any) {
-      setSyncErr(e?.message || "Failed to sync Google reviews.");
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "Failed to sync Google reviews.";
+      setSyncErr(msg);
     } finally {
       setSyncing(false);
     }
@@ -272,9 +287,7 @@ export default function DashboardPage() {
           <div className="mb-12">
             <div className="flex flex-col gap-3 rounded-xl border border-gray-200 bg-white p-4 text-sm text-gray-800 shadow-sm sm:flex-row sm:items-center sm:justify-between">
               <div>
-                <span className="font-medium">
-                  Looks like your account is not even a week old!
-                </span>{" "}
+                <span className="font-medium">Looks like your account is not even a week old!</span>{" "}
                 Click the tutorial to get an introduction to Upreview.
               </div>
               <button
@@ -305,10 +318,7 @@ export default function DashboardPage() {
         {/* -------------------------------- Recent Reviews -------------------------------- */}
         <section aria-labelledby="recent-heading" className="mb-6">
           <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <h2
-              id="recent-heading"
-              className="text-lg font-semibold tracking-tight text-gray-900"
-            >
+            <h2 id="recent-heading" className="text-lg font-semibold tracking-tight text-gray-900">
               Recent reviews
             </h2>
 
@@ -319,9 +329,7 @@ export default function DashboardPage() {
                 onClick={handleSyncReviews}
                 disabled={syncDisabled}
                 className={`rounded-lg px-3 py-1.5 text-sm font-semibold text-white focus:outline-none focus:ring-2 ${
-                  syncDisabled
-                    ? "bg-indigo-300 cursor-not-allowed"
-                    : "bg-indigo-600 hover:bg-indigo-700 focus:ring-indigo-400"
+                  syncDisabled ? "bg-indigo-300 cursor-not-allowed" : "bg-indigo-600 hover:bg-indigo-700 focus:ring-indigo-400"
                 }`}
                 aria-label="Get reviews from Google"
                 title={
@@ -365,34 +373,18 @@ export default function DashboardPage() {
           {/* Inline status for business-id resolution + sync */}
           {(bizIdErr || syncErr || syncOk) && (
             <div className="mb-3">
-              {bizIdErr && (
-                <div className="rounded-2xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">
-                  {bizIdErr}
-                </div>
-              )}
-              {syncErr && (
-                <div className="rounded-2xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">
-                  {syncErr}
-                </div>
-              )}
-              {syncOk && (
-                <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-700">
-                  {syncOk}
-                </div>
-              )}
+              {bizIdErr && <div className="rounded-2xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">{bizIdErr}</div>}
+              {syncErr && <div className="rounded-2xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">{syncErr}</div>}
+              {syncOk && <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-700">{syncOk}</div>}
             </div>
           )}
 
           {rvLoading ? (
             <RecentReviewsSkeleton />
           ) : rvErr ? (
-            <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
-              {rvErr}
-            </div>
+            <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">{rvErr}</div>
           ) : recent.length === 0 ? (
-            <div className="rounded-2xl border border-gray-200 bg-gray-50 p-4 text-sm text-gray-600">
-              No recent reviews yet.
-            </div>
+            <div className="rounded-2xl border border-gray-200 bg-gray-50 p-4 text-sm text-gray-600">No recent reviews yet.</div>
           ) : (
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
               {visible.map((r) => (
@@ -425,10 +417,7 @@ export default function DashboardPage() {
             if (e.key === "Escape") setShowTutorial(false);
           }}
         >
-          <div
-            className="absolute inset-0 bg-black/40"
-            onClick={() => setShowTutorial(false)}
-          />
+          <div className="absolute inset-0 bg-black/40" onClick={() => setShowTutorial(false)} />
           <div className="relative z-10 w-full max-w-5xl rounded-2xl bg-white p-6 shadow-2xl ring-1 ring-black/10">
             <div className="mb-4 flex items-center justify-between">
               <h2 className="text-lg font-semibold text-gray-900">
@@ -458,10 +447,7 @@ function RecentReviewsSkeleton() {
   return (
     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
       {Array.from({ length: 4 }).map((_, i) => (
-        <div
-          key={i}
-          className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm ring-1 ring-black/5"
-        >
+        <div key={i} className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm ring-1 ring-black/5">
           <div className="mb-2 h-4 w-2/3 rounded bg-gray-200" />
           <div className="mb-1 h-3 w-1/3 rounded bg-gray-200" />
           <div className="h-20 w-full rounded bg-gray-200" />
@@ -473,13 +459,7 @@ function RecentReviewsSkeleton() {
 
 function SentimentChip({ v }: { v?: string | boolean | null }) {
   const s =
-    typeof v === "string"
-      ? v.trim().toLowerCase()
-      : v === true
-      ? "good"
-      : v === false
-      ? "bad"
-      : "unreviewed";
+    typeof v === "string" ? v.trim().toLowerCase() : v === true ? "good" : v === false ? "bad" : "unreviewed";
 
   const styles =
     s === "good"
@@ -490,24 +470,14 @@ function SentimentChip({ v }: { v?: string | boolean | null }) {
 
   const label = s === "good" ? "Good" : s === "bad" ? "Bad" : "Unreviewed";
 
-  return (
-    <span
-      className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ring-1 ${styles}`}
-    >
-      {label}
-    </span>
-  );
+  return <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ring-1 ${styles}`}>{label}</span>;
 }
 
 function SourceBadge({ source }: { source: "google" | "internal" }) {
   const isGoogle = source === "google";
-  const styles = isGoogle
-    ? "bg-blue-50 text-blue-700 ring-blue-200"
-    : "bg-gray-50 text-gray-700 ring-gray-200";
+  const styles = isGoogle ? "bg-blue-50 text-blue-700 ring-blue-200" : "bg-gray-50 text-gray-700 ring-gray-200";
   return (
-    <span
-      className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium ring-1 ${styles}`}
-    >
+    <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium ring-1 ${styles}`}>
       {isGoogle ? "Google" : "Internal"}
     </span>
   );
@@ -527,9 +497,7 @@ function Stars({ value }: { value: number | null }) {
 function RecentReviewCard({ review }: { review: RecentReview }) {
   const dt = review.updated_at ?? review.created_at;
   const dateFmt = dt ? new Date(dt).toLocaleDateString() : "";
-  const title =
-    review.client_name ??
-    (review.is_primary === "google" ? "Google review" : "Internal review");
+  const title = review.client_name ?? (review.is_primary === "google" ? "Google review" : "Internal review");
 
   return (
     <div className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm ring-1 ring-black/5 transition hover:shadow-md">

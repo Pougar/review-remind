@@ -6,7 +6,6 @@ import { useRouter } from "next/navigation";
 import { authClient } from "@/app/lib/auth-client";
 import { ROUTES, API } from "@/app/lib/constants";
 
-
 /* ======================== NEW: Site background ======================== */
 function BackgroundSea() {
   // fixed, covers entire viewport; very pale blue gradient + blurred blobs
@@ -22,8 +21,7 @@ function BackgroundSea() {
       <div
         className="absolute inset-0 opacity-[0.04] mix-blend-multiply"
         style={{
-          backgroundImage:
-            "radial-gradient(transparent 0, rgba(0,0,0,.07) 100%)",
+          backgroundImage: "radial-gradient(transparent 0, rgba(0,0,0,.07) 100%)",
           backgroundSize: "2px 2px",
         }}
       />
@@ -31,6 +29,30 @@ function BackgroundSea() {
   );
 }
 
+/* ---------- Helpers for safe JSON + slug extraction ---------- */
+type MaybeObj = Record<string, unknown>;
+
+async function safeJson(res: Response): Promise<unknown> {
+  try {
+    return await res.json();
+  } catch {
+    return {};
+  }
+}
+
+function extractSlugFrom(resp: unknown): string | undefined {
+  if (!resp || typeof resp !== "object") return undefined;
+  const obj = resp as MaybeObj;
+
+  const directSlug = typeof obj.slug === "string" ? obj.slug : undefined;
+  const directName = typeof obj.name === "string" ? obj.name : undefined;
+
+  const user = obj.user && typeof obj.user === "object" ? (obj.user as MaybeObj) : undefined;
+  const userSlug = user && typeof user.slug === "string" ? user.slug : undefined;
+  const userName = user && typeof user.name === "string" ? user.name : undefined;
+
+  return userSlug ?? directSlug ?? userName ?? directName;
+}
 
 export default function DashboardLandingPage() {
   const router = useRouter();
@@ -47,7 +69,7 @@ export default function DashboardLandingPage() {
 
     try {
       const userId = session?.user?.id;
-      const email  = session?.user?.email;
+      const email = session?.user?.email;
 
       if (!userId) {
         // No session → go to login with next back to /dashboard
@@ -69,12 +91,8 @@ export default function DashboardLandingPage() {
       let slug: string | undefined;
 
       if (r.ok) {
-        const j: any = await r.json().catch(() => ({}));
-        slug =
-          j?.user?.name ??
-          j?.name ??
-          j?.user?.slug ??
-          j?.slug;
+        const j = await safeJson(r);
+        slug = extractSlugFrom(j);
       }
 
       // 2) Fallback: if no slug from get-name, try by email (if available)
@@ -88,12 +106,8 @@ export default function DashboardLandingPage() {
           body: JSON.stringify({ email }),
         });
         if (r2.ok) {
-          const j2: any = await r2.json().catch(() => ({}));
-          slug =
-            j2?.user?.name ??
-            j2?.name ??
-            j2?.user?.slug ??
-            j2?.slug;
+          const j2 = await safeJson(r2);
+          slug = extractSlugFrom(j2);
         }
       }
 
@@ -105,8 +119,8 @@ export default function DashboardLandingPage() {
       // Couldn’t resolve
       setError("We couldn’t find your dashboard slug.");
       setStatus(" ");
-    } catch (e: any) {
-      setError(e?.message || "Unexpected error while resolving your dashboard.");
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Unexpected error while resolving your dashboard.");
       setStatus(" ");
     } finally {
       running.current = false;

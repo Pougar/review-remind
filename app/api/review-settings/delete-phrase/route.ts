@@ -5,7 +5,6 @@ import { auth } from "@/app/lib/auth";
 
 /** ---------- PG Pool (singleton across HMR) ---------- */
 declare global {
-  // eslint-disable-next-line no-var
   var _pgPoolDeletePhrase: Pool | undefined;
 }
 
@@ -172,14 +171,15 @@ export async function POST(req: NextRequest) {
     };
 
     return NextResponse.json(resp, { status: 200 });
-  } catch (err: any) {
+  } catch (err: unknown) {
     try {
       await client.query("ROLLBACK");
     } catch {
       /* ignore */
     }
 
-    const msg = String(err?.message || "");
+    const e = err instanceof Error ? err : new Error(String(err));
+    const msg = e.message ?? "";
     if (msg.toLowerCase().includes("row-level security")) {
       return NextResponse.json(
         {
@@ -192,7 +192,7 @@ export async function POST(req: NextRequest) {
 
     console.error(
       "[/api/settings/review-settings/delete-phrase] error:",
-      err?.stack || err
+      e.stack ?? e
     );
 
     return NextResponse.json(

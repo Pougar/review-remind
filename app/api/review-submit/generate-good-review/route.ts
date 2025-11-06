@@ -12,7 +12,6 @@ export const dynamic = "force-dynamic";
    PG Pool (singleton across HMR)
    ============================================================ */
 declare global {
-  // eslint-disable-next-line no-var
   var _pgPoolGenGoodReviewsPublic: Pool | undefined;
 }
 function getPool(): Pool {
@@ -35,11 +34,6 @@ function getPool(): Pool {
 function isUUID(v?: string | null) {
   return !!v && /^[0-9a-fA-F-]{36}$/.test(v);
 }
-const isClientIdPublicValid = (cid?: string | null) => {
-  if (!cid) return false;
-  if (cid === "test") return true;
-  return isUUID(cid);
-};
 
 // for error responses
 function badRequest(message: string, extra?: Record<string, unknown>) {
@@ -173,7 +167,7 @@ export async function POST(req: NextRequest) {
   }
 
   // --- Token validation (skip in tester mode) ---
-  // Public endpoint, so we rely on the signed token you emailed out.  
+  // Public endpoint, so we rely on the signed token you emailed out.
   // Anyone hitting this without a valid token shouldn't get to see business info.
   if (clientId !== "test") {
     if (!token) {
@@ -374,8 +368,9 @@ Return ONLY valid JSON (no markdown fences, no extra text) with this shape:
         headers: { "Content-Type": "application/json" },
       }
     );
-  } catch (err: any) {
-    console.error("[public/generate-good-reviews] Gemini error:", err);
+  } catch (err: unknown) {
+    const e = err instanceof Error ? err : new Error(String(err));
+    console.error("[public/generate-good-reviews] Gemini error:", e);
     return serverError("AI generation failed.");
   }
 }

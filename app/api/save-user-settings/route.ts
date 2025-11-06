@@ -23,10 +23,10 @@ function slugify(input: string, maxLen = 60): string {
 }
 
 /* ========= SQL ========= */
-const SQL_SET_RLS          = `SET LOCAL app.user_id = $1` as const;
-const SQL_GET_CURRENT      = `SELECT display_name, slug FROM public.myusers WHERE betterauth_id = $1 LIMIT 1` as const;
-const SQL_UPDATE_NAME      = `UPDATE public.myusers SET display_name = $2, updated_at = now() WHERE betterauth_id = $1 RETURNING display_name` as const;
-const SQL_UPDATE_SLUG      = `UPDATE public.myusers SET slug = $2, updated_at = now() WHERE betterauth_id = $1 RETURNING slug` as const;
+const SQL_SET_RLS = `SET LOCAL app.user_id = $1` as const;
+const SQL_GET_CURRENT = `SELECT display_name, slug FROM public.myusers WHERE betterauth_id = $1 LIMIT 1` as const;
+const SQL_UPDATE_NAME = `UPDATE public.myusers SET display_name = $2, updated_at = now() WHERE betterauth_id = $1 RETURNING display_name` as const;
+const SQL_UPDATE_SLUG = `UPDATE public.myusers SET slug = $2, updated_at = now() WHERE betterauth_id = $1 RETURNING slug` as const;
 
 type RowUser = { display_name: string | null; slug: string | null };
 
@@ -93,9 +93,13 @@ export async function POST(req: NextRequest) {
         try {
           const r = await client.query<{ slug: string }>(SQL_UPDATE_SLUG, [userId, desired]);
           finalSlug = r.rows[0]?.slug ?? finalSlug;
-        } catch (e: any) {
+        } catch (e: unknown) {
           // Unique violation → keep old slug, mark conflict, continue (do not roll back name change)
-          if (e?.code === "23505") {
+          const code =
+            typeof e === "object" && e && "code" in e
+              ? (e as { code?: string }).code
+              : undefined;
+          if (code === "23505") {
             slugConflict = true;
           } else {
             throw e;
@@ -113,7 +117,9 @@ export async function POST(req: NextRequest) {
       message: slugConflict ? "Slug is not unique. Display name was saved; slug unchanged." : undefined,
     });
   } catch (e) {
-    try { await client?.query("ROLLBACK"); } catch {}
+    try {
+      await client?.query("ROLLBACK");
+    } catch {}
     console.error("save-user-settings failed:", e);
     return NextResponse.json(
       { error: "INTERNAL", message: "Could not save settings." },

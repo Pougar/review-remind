@@ -31,6 +31,18 @@ function BackgroundSea() {
   );
 }
 
+// Safe error-to-string helper
+function errorMsg(e: unknown): string {
+  if (e instanceof Error) return e.message;
+  if (typeof e === "string") return e;
+  try {
+    return JSON.stringify(e);
+  } catch {
+    return "Unknown error";
+  }
+}
+
+
 /* ======================== Stars + Mini Review Card ======================== */
 function Star({
   className = "",
@@ -210,56 +222,57 @@ export default function LogInPage() {
   const disabled = loading || !email || !password;
 
   const handleSignInSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    if (disabled) return;
-    setError("");
-    setLoading(true);
+  e.preventDefault();
+  if (loading || !email || !password) return;
+  setError("");
+  setLoading(true);
 
-    try {
-      const { error: signInErr } = await authClient.signIn.email(
-        { email, password },
-        {
-          onSuccess: async () => {
-            // 1) We’re signed in — now resolve the slug by EMAIL
-            try {
-              const r = await fetch(API.GET_MY_SLUG_BY_EMAIL, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ email }),
-              });
+  try {
+    const { error: signInErr } = await authClient.signIn.email(
+      { email, password },
+      {
+        onSuccess: async () => {
+          // 1) Signed in — resolve slug by EMAIL
+          try {
+            const r = await fetch(API.GET_MY_SLUG_BY_EMAIL, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ email }),
+            });
 
-              if (!r.ok) {
-                const msg = await r.text().catch(() => "");
-                throw new Error(msg || "Failed to resolve your dashboard slug.");
-              }
-
-              const { slug } = (await r.json()) as { slug?: string };
-              if (!slug) throw new Error("No slug returned.");
-
-              // 2) Redirect to /dashboard/[slug]
-              router.push(`${ROUTES.DASHBOARD}/${encodeURIComponent(slug)}`);
-            } catch (slugErr: any) {
-              setError(slugErr?.message || "Could not resolve your account slug.");
-            } finally {
-              setLoading(false);
+            if (!r.ok) {
+              const msg = await r.text().catch(() => "");
+              throw new Error(msg || "Failed to resolve your dashboard slug.");
             }
-          },
-          onError: (ctx) => {
-            setError(ctx.error?.message || "Log in failed. Check your credentials and try again.");
-            setLoading(false);
-          },
-        }
-      );
 
-      if (signInErr) {
-        setError(signInErr.message || "Log in failed. Please try again.");
+            const { slug } = (await r.json()) as { slug?: string };
+            if (!slug) throw new Error("No slug returned.");
+
+            // 2) Redirect to /dashboard/[slug]
+            router.push(`${ROUTES.DASHBOARD}/${encodeURIComponent(slug)}`);
+          } catch (slugErr: unknown) {
+            setError(errorMsg(slugErr));
+          } finally {
+            setLoading(false);
+          }
+        },
+        onError: (ctx) => {
+          setError(ctx.error?.message || "Log in failed. Check your credentials and try again.");
+          setLoading(false);
+        },
       }
-    } catch (err: any) {
-      setError(err?.message || "Network error. Please try again.");
-    } finally {
-      setLoading(false);
+    );
+
+    if (signInErr) {
+      setError(signInErr.message || "Log in failed. Please try again.");
     }
-  };
+  } catch (err: unknown) {
+    setError(errorMsg(err));
+  } finally {
+    setLoading(false);
+  }
+};
+
 
   return (
     <main className="min-h-screen w-full grid grid-cols-1 lg:grid-cols-2">

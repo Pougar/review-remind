@@ -35,7 +35,7 @@ function emailLocal(email?: string) {
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json().catch(() => ({}));
-    let id = (body?.id ?? "").toString().trim();    // betterauth_id (optional)
+    let id = (body?.id ?? "").toString().trim(); // betterauth_id (optional)
     const email = (body?.email ?? "").toString().trim().toLowerCase();
     const name = (body?.name ?? "").toString().trim();
 
@@ -55,7 +55,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    let base = slugify(name) || slugify(emailLocal(email)) || `user-${id.slice(0, 8)}`;
+    const base = slugify(name) || slugify(emailLocal(email)) || `user-${id.slice(0, 8)}`;
 
     const client = await pool.connect();
     try {
@@ -85,8 +85,12 @@ export async function POST(req: NextRequest) {
           try {
             const got = await attempt(candidate);
             if (got) return got;
-          } catch (e: any) {
-            if (e?.code === "23505") continue; // slug unique collision
+          } catch (e: unknown) {
+            const code =
+              typeof e === "object" && e && "code" in e
+                ? (e as { code?: string }).code
+                : undefined;
+            if (code === "23505") continue; // slug unique collision
             throw e;
           }
         }
@@ -128,7 +132,9 @@ export async function POST(req: NextRequest) {
       await client.query("COMMIT");
       return NextResponse.json({ slug: finalSlug });
     } catch (e) {
-      try { await client.query("ROLLBACK"); } catch {}
+      try {
+        await client.query("ROLLBACK");
+      } catch {}
       throw e;
     } finally {
       client.release();

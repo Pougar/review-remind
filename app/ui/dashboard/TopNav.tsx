@@ -1,51 +1,56 @@
 "use client";
 
 import Link from "next/link";
-import {
-  usePathname,
-  useParams,
-  useRouter,
-} from "next/navigation";
-import {
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  useCallback,
-} from "react";
+import { usePathname, useParams, useRouter } from "next/navigation";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type React from "react";
 import clsx from "clsx";
 import { authClient } from "@/app/lib/auth-client";
 import { useLogoUrl } from "@/app/lib/logoUrlClient";
-import { ROUTES, NAV_ITEMS, APP_NAME, API } from "@/app/lib/constants";
+import { ROUTES, NAV_ITEMS, APP_NAME } from "@/app/lib/constants";
 
 /* ============================================================
    Helpers
 ============================================================ */
 
-function resolveLogo(input: any): {
+type LogoInput =
+  | string
+  | null
+  | undefined
+  | {
+      url?: string;
+      signedUrl?: string;
+      isLoading?: boolean;
+      loading?: boolean;
+      error?: unknown;
+    };
+
+function resolveLogo(input: unknown): {
   url: string | null;
   isLoading: boolean;
   error: unknown | null;
 } {
-  if (typeof input === "string" || input == null)
-    return { url: input ?? null, isLoading: false, error: null };
+  if (typeof input === "string" || input == null) {
+    return { url: (input as string) ?? null, isLoading: false, error: null };
+  }
 
   if (typeof input === "object") {
+    const obj = input as Record<string, unknown>;
     const url =
-      typeof input.url === "string"
-        ? input.url
-        : typeof input.signedUrl === "string"
-        ? input.signedUrl
+      typeof obj.url === "string"
+        ? (obj.url as string)
+        : typeof obj.signedUrl === "string"
+        ? (obj.signedUrl as string)
         : null;
 
     const isLoading =
-      typeof input.isLoading === "boolean"
-        ? input.isLoading
-        : typeof input.loading === "boolean"
-        ? input.loading
+      typeof obj.isLoading === "boolean"
+        ? (obj.isLoading as boolean)
+        : typeof obj.loading === "boolean"
+        ? (obj.loading as boolean)
         : false;
 
-    const error = "error" in input ? (input as any).error : null;
+    const error = (obj && "error" in obj ? (obj.error as unknown) : null) ?? null;
 
     return { url, isLoading, error };
   }
@@ -53,11 +58,7 @@ function resolveLogo(input: any): {
   return { url: null, isLoading: false, error: null };
 }
 
-function isActive(
-  pathname: string,
-  target: string,
-  opts?: { strict?: boolean }
-) {
+function isActive(pathname: string, target: string, opts?: { strict?: boolean }) {
   if (opts?.strict) return pathname === target;
   return pathname === target || pathname.startsWith(target + "/");
 }
@@ -65,46 +66,24 @@ function isActive(
 function titleFromSlug(slug?: string) {
   if (!slug) return "Business";
   try {
-    const s = decodeURIComponent(slug)
-      .replace(/[-_]+/g, " ")
-      .trim();
+    const s = decodeURIComponent(slug).replace(/[-_]+/g, " ").trim();
     return s.replace(/\b\w/g, (m) => m.toUpperCase());
   } catch {
     return slug;
   }
 }
 
-// Types for the business list in the modal
-type BusinessSummary = {
-  id: string;
-  slug: string;
-  display_name: string;
-};
-
 /**
- * Safely unwrap BetterAuth client session
- * so TS stops complaining about .user not existing.
- *
- * better-auth client typically returns:
- *   { data: { user, session } | null, error: Error | null }
- *
- * We'll return userId or null.
+ * Safely unwrap BetterAuth client session to get userId.
  */
 async function fetchUserIdFromClientSession(): Promise<string | null> {
   try {
     const sess = await authClient.getSession();
-    // sess could be { data: {...} } or { error: ... }
-    // We'll just dig defensively:
-    const anySess: any = sess;
-    const maybeUserId =
-      anySess?.data?.user?.id ??
-      anySess?.user?.id ?? // in case lib returns flattened .user in some versions
-      null;
-
-    if (typeof maybeUserId === "string" && maybeUserId.trim() !== "") {
-      return maybeUserId;
-    }
-    return null;
+    // Narrow various possible shapes:
+    const maybe =
+      (sess as { data?: { user?: { id?: string | null } } } | null) ?? null;
+    const id = maybe?.data?.user?.id;
+    return typeof id === "string" && id.trim() ? id : null;
   } catch {
     return null;
   }
@@ -123,21 +102,19 @@ export default function TopNav() {
   const slug = params.slug ?? "";
   const businessSlug = params.bslug ?? "";
 
-  // Avatar/logo
-  const rawLogo = typeof useLogoUrl === "function" ? useLogoUrl() : null;
+  // Avatar/logo (must not call hooks conditionally)
+  const rawLogo = useLogoUrl();
   const {
     url: resolvedLogoUrl,
     isLoading: logoLoading,
     error: logoError,
-  } = useMemo(() => resolveLogo(rawLogo as any), [rawLogo]);
+  } = useMemo(() => resolveLogo(rawLogo as LogoInput), [rawLogo]);
+
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
 
   // Avatar dropdown menu state
   const [open, setOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
-
-  // Auth userId (for fetching businesses list)
-  const [userId, setUserId] = useState<string | null>(null);
 
   /* ------------------------------------------------------------
      Basic effects
@@ -150,10 +127,7 @@ export default function TopNav() {
 
   useEffect(() => {
     function onDocClick(e: MouseEvent) {
-      if (
-        menuRef.current &&
-        !menuRef.current.contains(e.target as Node)
-      ) {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
         setOpen(false);
       }
     }
@@ -171,28 +145,27 @@ export default function TopNav() {
     }
   };
 
-  /* ------------------------------------------------------------
-     Grab userId (client-side BetterAuth)
-  ------------------------------------------------------------ */
+  // (Optional) If you need userId later, keep this; otherwise remove it entirely.
+  // Here we keep it but do not surface it to avoid "assigned but unused" warning.
   useEffect(() => {
     let alive = true;
     (async () => {
-      const uid = await fetchUserIdFromClientSession();
+      const _uid = await fetchUserIdFromClientSession();
       if (!alive) return;
-      setUserId(uid);
+      // no-op for now
+      void _uid;
     })();
     return () => {
       alive = false;
     };
   }, []);
 
-
   /* ------------------------------------------------------------
-     Open Switch Business modal
+     Open Switch Business (navigate to the dashboard root for user)
   ------------------------------------------------------------ */
   function openSwitchModal() {
     setOpen(false);
-  router.push(`/dashboard/${slug}`);
+    router.push(`/dashboard/${slug}`);
   }
 
   /* ------------------------------------------------------------
@@ -230,13 +203,13 @@ export default function TopNav() {
     <>
       {/* Top bar */}
       <header
-  className="fixed inset-x-0 top-0 z-50 border-b border-sky-200/40 bg-sky-50/10
+        className="fixed inset-x-0 top-0 z-50 border-b border-sky-200/40 bg-sky-50/10
              shadow-[0_10px_30px_-15px_rgba(2,6,23,0.35)]
              supports-[backdrop-filter]:bg-sky-50/5
              supports-[backdrop-filter]:backdrop-blur-md
              supports-[backdrop-filter]:backdrop-brightness-105
              supports-[backdrop-filter]:backdrop-saturate-100"
->
+      >
         <div className="mx-auto flex h-16 max-w-7xl items-stretch px-6">
           {/* Left side: App + Business name */}
           <div className="flex items-center gap-3 pr-6">
@@ -258,33 +231,29 @@ export default function TopNav() {
           </div>
 
           {/* Center nav */}
-<nav className="flex items-stretch gap-0 overflow-hidden">
-  {navLinks.map((l) => {
-    const isHome = l.href === brandHref;
-    const active = isActive(pathname, l.href, { strict: isHome });
-    return (
-      <Link
-        key={l.key}
-        href={l.href}
-        className={clsx(
-          "flex items-center px-6 text-base font-medium transition-colors",
-          "text-gray-700 hover:bg-sky-200/40 hover:text-gray-900",
-          active && "bg-sky-100/60 text-sky-800"
-        )}
-      >
-        {l.label}
-      </Link>
-    );
-  })}
-</nav>
+          <nav className="flex items-stretch gap-0 overflow-hidden">
+            {navLinks.map((l) => {
+              const isHome = l.href === brandHref;
+              const active = isActive(pathname, l.href, { strict: isHome });
+              return (
+                <Link
+                  key={l.key}
+                  href={l.href}
+                  className={clsx(
+                    "flex items-center px-6 text-base font-medium transition-colors",
+                    "text-gray-700 hover:bg-sky-200/40 hover:text-gray-900",
+                    active && "bg-sky-100/60 text-sky-800"
+                  )}
+                >
+                  {l.label}
+                </Link>
+              );
+            })}
+          </nav>
 
           {/* Right side: avatar dropdown */}
           <div className="ml-auto flex items-center">
-            <div
-              ref={menuRef}
-              className="relative"
-              onKeyDown={handleKeyDown}
-            >
+            <div ref={menuRef} className="relative" onKeyDown={handleKeyDown}>
               <button
                 type="button"
                 aria-haspopup="menu"
@@ -335,18 +304,12 @@ export default function TopNav() {
                   {/* Business settings link */}
                   <Link
                     role="menuitem"
-                    href={ROUTES.DASHBOARD_BUSINESS_SETTINGS(
-                      slug,
-                      businessSlug
-                    )}
+                    href={ROUTES.DASHBOARD_BUSINESS_SETTINGS(slug, businessSlug)}
                     className={clsx(
                       "block w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50",
                       isActive(
                         pathname,
-                        ROUTES.DASHBOARD_BUSINESS_SETTINGS(
-                          slug,
-                          businessSlug
-                        ),
+                        ROUTES.DASHBOARD_BUSINESS_SETTINGS(slug, businessSlug),
                         { strict: true }
                       ) && "bg-blue-50 text-blue-700"
                     )}

@@ -27,6 +27,16 @@ type Monthly = {
   x: number;       // numeric index for axis domain control
 };
 
+function getErrorMessage(e: unknown): string {
+  if (e instanceof Error) return e.message;
+  if (typeof e === "string") return e;
+  try {
+    return JSON.stringify(e);
+  } catch {
+    return "Unknown error";
+  }
+}
+
 export default function ReviewsGraph({ userId, businessSlug, months = 12 }: Props) {
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -48,12 +58,12 @@ export default function ReviewsGraph({ userId, businessSlug, months = 12 }: Prop
           cache: "no-store",
         });
         if (!res.ok) throw new Error(`Graph info error ${res.status}`);
-        const data = await res.json();
+        const data = (await res.json()) as { points?: ApiPoint[] };
         if (!alive) return;
-        const points: ApiPoint[] = Array.isArray(data?.points) ? data.points : [];
+        const points: ApiPoint[] = Array.isArray(data?.points) ? data.points! : [];
         setRaw(points);
-      } catch (e: any) {
-        if (alive) setErr(e?.message || "Failed to load review trends.");
+      } catch (e: unknown) {
+        if (alive) setErr(getErrorMessage(e) || "Failed to load review trends.");
       } finally {
         if (alive) setLoading(false);
       }

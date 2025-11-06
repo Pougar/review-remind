@@ -5,13 +5,19 @@ import { Pool, type PoolClient } from "pg";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+/* ---------- PG Pool (singleton across HMR) ---------- */
+declare global {
+  // eslint-disable-next-line no-var
+  var __pgPool: Pool | undefined;
+}
+
 const pool =
-  (globalThis as any).__pgPool ??
+  globalThis.__pgPool ??
   new Pool({
     connectionString: process.env.DATABASE_URL,
     ssl: { rejectUnauthorized: true },
   });
-(globalThis as any).__pgPool = pool;
+globalThis.__pgPool = pool;
 
 const isUUID = (v?: string) => !!v && /^[0-9a-fA-F-]{36}$/.test(v);
 

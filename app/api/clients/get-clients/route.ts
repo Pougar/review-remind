@@ -4,21 +4,18 @@ import { Pool } from "pg";
 import { auth } from "@/app/lib/auth";
 
 /** ---------- PG Pool (singleton across HMR) ---------- */
-declare global {
-  // eslint-disable-next-line no-var
-  var _pgPoolClients: Pool | undefined;
-}
+const globalForPg = globalThis as unknown as { _pgPoolClients?: Pool };
 function getPool(): Pool {
-  if (!global._pgPoolClients) {
+  if (!globalForPg._pgPoolClients) {
     const cs = process.env.DATABASE_URL;
     if (!cs) throw new Error("DATABASE_URL is not set");
-    global._pgPoolClients = new Pool({
+    globalForPg._pgPoolClients = new Pool({
       connectionString: cs,
       ssl: { rejectUnauthorized: false },
       max: 5,
     });
   }
-  return global._pgPoolClients;
+  return globalForPg._pgPoolClients;
 }
 
 export const dynamic = "force-dynamic";
@@ -155,17 +152,17 @@ export async function POST(req: NextRequest) {
       ORDER BY b.added_at DESC, b.id DESC
     `;
 
-    // Note: only one param now (businessId)
     const { rows } = await db.query(sql, [businessId]);
     await db.query("COMMIT");
 
     return NextResponse.json(
-      { clients: rows }, // [] when none
+      { clients: rows },
       { status: 200, headers: { "Cache-Control": "no-store" } }
     );
-  } catch (err: any) {
+  } catch (err: unknown) {
     try { await db.query("ROLLBACK"); } catch {}
-    console.error("[POST /api/clients/get-clients] Error:", err?.message || err);
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("[POST /api/clients/get-clients] Error:", msg);
     return NextResponse.json({ error: "Server error" }, { status: 500 });
   } finally {
     db.release();

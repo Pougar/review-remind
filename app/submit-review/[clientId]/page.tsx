@@ -46,8 +46,7 @@ function dedupeCaseInsensitive(list: string[]): string[] {
   return out;
 }
 
-const isUUID = (v?: string | null) =>
-  !!v && /^[0-9a-fA-F-]{36}$/.test(v);
+const isUUID = (v?: string | null) => !!v && /^[0-9a-fA-F-]{36}$/.test(v);
 
 // send user to /error?m=<msg>
 function bounceToError(
@@ -57,6 +56,32 @@ function bounceToError(
   const params = new URLSearchParams();
   params.set("m", msg);
   router.replace(`/error?${params.toString()}`);
+}
+
+/* ---------- safe parsing helpers (avoid `any`) ---------- */
+function isObj(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null;
+}
+function getStringField(obj: unknown, key: string): string | null {
+  if (!isObj(obj)) return null;
+  const val = obj[key];
+  return typeof val === "string" ? val : null;
+}
+function getStringArrayField(obj: unknown, key: string): string[] | null {
+  if (!isObj(obj)) return null;
+  const val = obj[key];
+  return Array.isArray(val) && val.every((x) => typeof x === "string")
+    ? (val as string[])
+    : null;
+}
+function errorMsg(e: unknown): string {
+  if (e instanceof Error) return e.message;
+  if (typeof e === "string") return e;
+  try {
+    return JSON.stringify(e);
+  } catch {
+    return "Unknown error";
+  }
 }
 
 /* ============================================================
@@ -203,10 +228,7 @@ export default function SubmitReviewPage() {
           let msg = "We couldn't load the business details.";
           try {
             const data: BusinessDetailsResp = await res.json();
-            msg =
-              data?.message ||
-              data?.error ||
-              msg;
+            msg = data?.message || data?.error || msg;
           } catch {
             /* fallback keep msg */
           }
@@ -455,48 +477,35 @@ export default function SubmitReviewPage() {
       if (!res.ok) {
         let reason = "Failed to generate review.";
         try {
-          const raw = await res.json();
-          reason =
-            raw?.message ||
-            raw?.error ||
-            reason;
+          const raw: unknown = await res.json();
+          reason = getStringField(raw, "message") ?? getStringField(raw, "error") ?? reason;
         } catch {
           /* leave reason */
         }
         throw new Error(reason);
       }
 
-      const data: GenerateGoodReviewResp = await res
-        .json()
-        .catch(() => ({} as any));
-
-      let generated = "";
-      if (
-        data &&
-        typeof data === "object" &&
-        "reviews" in data &&
-        Array.isArray((data as any).reviews)
-      ) {
-        const arr = (data as any).reviews as string[];
-        if (arr.length > 0) {
-          generated = (arr[0] || "").trim();
-        }
+      let parsed: unknown = null;
+      try {
+        parsed = await res.json();
+      } catch {
+        parsed = null;
       }
+
+      const reviews = getStringArrayField(parsed, "reviews");
+      const generated = (reviews && reviews[0] ? reviews[0].trim() : "") || "";
 
       if (!generated) {
         const errMsg =
-          (data as any)?.message ||
-          (data as any)?.error ||
+          getStringField(parsed, "message") ??
+          getStringField(parsed, "error") ??
           "No review text returned.";
         throw new Error(errMsg);
       }
 
       setReviewText(generated);
-    } catch (err: any) {
-      setAiError(
-        err?.message ||
-          "Couldn't generate a review. Please try again."
-      );
+    } catch (err: unknown) {
+      setAiError(errorMsg(err) || "Couldn't generate a review. Please try again.");
     } finally {
       setAiLoading(false);
     }

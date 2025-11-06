@@ -1,11 +1,12 @@
+// app/dashboard/[slug]/[bslug]/clients/page.tsx
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams } from "next/navigation";
 import { authClient } from "@/app/lib/auth-client";
 import { useUser } from "@/app/lib/UserContext";
 import { API } from "@/app/lib/constants";
-import  AddClientForm  from "@/app/ui/clients/AddClientForm";
+import AddClientForm from "@/app/ui/clients/AddClientForm";
 import BackgroundSea from "@/app/ui/background-sea";
 
 /* ---------------- Types from /api/get-clients ---------------- */
@@ -23,7 +24,7 @@ type Client = {
   invoice_status: "PAID" | "SENT" | "DRAFT" | "PAID BUT NOT SENT" | null;
 
   // Timeline & canonical stage (from API)
-  added_at: string;                 // ISO
+  added_at: string; // ISO
   email_last_sent_at: string | null;
   click_at: string | null;
   review_submitted_at: string | null;
@@ -31,12 +32,16 @@ type Client = {
   stage_at: string | null;
 };
 
+type GetBizIdResp = { id?: string };
+type GetClientsResp = Client[] | { clients?: Client[] };
 
+/* Small helper: safe typed JSON */
+async function safeJson<T>(res: Response): Promise<T> {
+  return (await res.json().catch(() => ({}))) as T;
+}
 
 export default function ClientsPage() {
-  const router = useRouter();
   const params = useParams() as { slug?: string; bslug?: string };
-  const slug = params.slug ?? "";
   const bslug = params.bslug ?? "";
 
   const { display } = useUser();
@@ -69,16 +74,19 @@ export default function ClientsPage() {
           const txt = await res.text().catch(() => "");
           throw new Error(txt || `Failed to resolve business (${res.status})`);
         }
-        const data = await res.json();
+        const data = await safeJson<GetBizIdResp>(res);
         if (!data?.id) throw new Error("Business id missing in response.");
         if (alive) setBusinessId(String(data.id));
-      } catch (e: any) {
-        if (alive) setResolveErr(e?.message || "Failed to resolve business.");
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : "Failed to resolve business.";
+        if (alive) setResolveErr(msg);
       } finally {
         if (alive) setResolvingBiz(false);
       }
     })();
-    return () => { alive = false; };
+    return () => {
+      alive = false;
+    };
   }, [bslug]);
 
   /* ---------------- Clients state ---------------- */
@@ -86,28 +94,32 @@ export default function ClientsPage() {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
 
-  const refreshClients = useCallback(async (bizId?: string | null) => {
-    const id = bizId ?? businessId;
-    if (!id) return;
-    try {
-      const res = await fetch(API.GET_CLIENTS, {
-        method: "POST",
-        cache: "no-store",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ businessId: id }),
-      });
-      if (!res.ok) {
-        const text = await res.text().catch(() => "");
-        throw new Error(`Failed to load clients (${res.status}) ${text}`);
+  const refreshClients = useCallback(
+    async (bizId?: string | null) => {
+      const id = bizId ?? businessId;
+      if (!id) return;
+      try {
+        const res = await fetch(API.GET_CLIENTS, {
+          method: "POST",
+          cache: "no-store",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ businessId: id }),
+        });
+        if (!res.ok) {
+          const text = await res.text().catch(() => "");
+          throw new Error(`Failed to load clients (${res.status}) ${text}`);
+        }
+        const data = await safeJson<GetClientsResp>(res);
+        const list: Client[] = Array.isArray(data) ? data : data.clients ?? [];
+        setClients(list);
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : "Failed to load clients";
+        setErr(msg);
       }
-      const data = await res.json();
-      const list: Client[] = Array.isArray(data) ? data : (data.clients ?? []);
-      setClients(list);
-    } catch (e: any) {
-      setErr(e.message || "Failed to load clients");
-    }
-  }, [businessId]);
+    },
+    [businessId]
+  );
 
   // Initial load after business resolves
   useEffect(() => {
@@ -122,7 +134,9 @@ export default function ClientsPage() {
         if (alive) setLoading(false);
       }
     })();
-    return () => { alive = false; };
+    return () => {
+      alive = false;
+    };
   }, [businessId, refreshClients]);
 
   /* ---------------- Xero import (business-scoped) ---------------- */
@@ -155,7 +169,9 @@ export default function ClientsPage() {
 
   const dateValid = useMemo(() => {
     if (!year || !month || !day) return false;
-    const y = Number(year), m = Number(month), d = Number(day);
+    const y = Number(year),
+      m = Number(month),
+      d = Number(day);
     if (!Number.isInteger(y) || y < 1900 || y > 2100) return false;
     if (!Number.isInteger(m) || m < 1 || m > 12) return false;
     const maxDay = new Date(y, m, 0).getDate();
@@ -163,37 +179,42 @@ export default function ClientsPage() {
     return true;
   }, [year, month, day]);
 
-  const syncFromXero = useCallback(async (since?: string | null) => {
-    if (!userId || !businessId) return;
-    setSyncErr(null);
-    setSyncing(true);
-    try {
-      const body: Record<string, any> = {
-        businessId,
-        // some implementations require createdBy; include to be safe
-        createdBy: userId,
-      };
-      if (since && since.trim()) body.since = since.trim();
+  type XeroImportBody = { businessId: string; createdBy: string; since?: string };
 
-      const res = await fetch(API.GET_CLIENTS_FROM_XERO, {
-        method: "POST",
-        cache: "no-store",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      if (!res.ok) {
-        const text = await res.text().catch(() => "");
-        throw new Error(`Sync failed (${res.status}) ${text}`);
+  const syncFromXero = useCallback(
+    async (since?: string | null) => {
+      if (!userId || !businessId) return;
+      setSyncErr(null);
+      setSyncing(true);
+      try {
+        const body: XeroImportBody = {
+          businessId,
+          createdBy: userId,
+          ...(since && since.trim() ? { since: since.trim() } : {}),
+        };
+
+        const res = await fetch(API.GET_CLIENTS_FROM_XERO, {
+          method: "POST",
+          cache: "no-store",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        if (!res.ok) {
+          const text = await res.text().catch(() => "");
+          throw new Error(`Sync failed (${res.status}) ${text}`);
+        }
+        await refreshClients();
+        setDateOpen(false);
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : "Failed to import from Xero";
+        setSyncErr(msg);
+      } finally {
+        setSyncing(false);
       }
-      await refreshClients();
-      setDateOpen(false);
-    } catch (e: any) {
-      setSyncErr(e.message || "Failed to import from Xero");
-    } finally {
-      setSyncing(false);
-    }
-  }, [userId, businessId, refreshClients]);
+    },
+    [userId, businessId, refreshClients]
+  );
 
   /* ---------------- Google reviews sync (business-scoped) ---------------- */
   const [gSyncErr, setGSyncErr] = useState<string | null>(null);
@@ -216,8 +237,9 @@ export default function ClientsPage() {
         throw new Error(`Google sync failed (${res.status}) ${text}`);
       }
       await refreshClients();
-    } catch (e: any) {
-      setGSyncErr(e.message || "Failed to sync with Google reviews");
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "Failed to sync with Google reviews";
+      setGSyncErr(msg);
     } finally {
       setGSyncing(false);
     }
@@ -229,7 +251,7 @@ export default function ClientsPage() {
   const [bulkErr, setBulkErr] = useState<string | null>(null);
 
   const toggleSelect = useCallback((id: string, checked: boolean) => {
-    setSelectedIds(prev => {
+    setSelectedIds((prev) => {
       const next = new Set(prev);
       if (checked) next.add(id);
       else next.delete(id);
@@ -240,9 +262,12 @@ export default function ClientsPage() {
     () => selectedIds.size > 0 && selectedIds.size === clients.length,
     [selectedIds, clients.length]
   );
-  const toggleSelectAll = useCallback((checked: boolean) => {
-    setSelectedIds(() => checked ? new Set(clients.map(c => c.id)) : new Set());
-  }, [clients]);
+  const toggleSelectAll = useCallback(
+    (checked: boolean) => {
+      setSelectedIds(() => (checked ? new Set(clients.map((c) => c.id)) : new Set()));
+    },
+    [clients]
+  );
 
   const sendBulkEmails = useCallback(async () => {
     if (!businessId || selectedIds.size === 0) return;
@@ -262,8 +287,9 @@ export default function ClientsPage() {
       }
       setSelectedIds(new Set());
       await refreshClients();
-    } catch (e: any) {
-      setBulkErr(e.message || "Failed to send emails to selected clients");
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "Failed to send emails to selected clients";
+      setBulkErr(msg);
     } finally {
       setBulkSending(false);
     }
@@ -299,7 +325,7 @@ export default function ClientsPage() {
 
   return (
     <div className="min-h-screen w-full">
-      <BackgroundSea/>
+      <BackgroundSea />
       <div className="mx-auto max-w-6xl">
         {/* Header */}
         <header className="mb-4 flex items-start justify-between gap-4 relative z-30">
@@ -321,18 +347,30 @@ export default function ClientsPage() {
                 disabled={!businessId || gSyncing}
                 className="inline-flex items-center gap-2 rounded-full bg-sky-600 px-4 py-2 text-sm font-medium text-white shadow hover:bg-sky-700 focus:outline-none focus:ring-2 focus:ring-sky-400 disabled:opacity-60"
               >
-                {gSyncing ? (<><Spinner className="h-4 w-4" /> Syncing…</>) : "Sync Google Reviews"}
+                {gSyncing ? (
+                  <>
+                    <Spinner className="h-4 w-4" /> Syncing…
+                  </>
+                ) : (
+                  "Sync Google Reviews"
+                )}
               </button>
 
               {/* Xero import */}
               <button
-                onClick={() => setDateOpen(v => !v)}
+                onClick={() => setDateOpen((v) => !v)}
                 disabled={!businessId}
                 className="inline-flex items-center gap-2 rounded-full bg-emerald-600 px-4 py-2 text-sm font-medium text-white shadow hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-400 disabled:opacity-60"
                 aria-expanded={dateOpen}
                 aria-controls="xero-date-panel"
               >
-                {syncing ? (<><Spinner className="h-4 w-4" /> Importing…</>) : "Import from Xero"}
+                {syncing ? (
+                  <>
+                    <Spinner className="h-4 w-4" /> Importing…
+                  </>
+                ) : (
+                  "Import from Xero"
+                )}
               </button>
 
               {/* Add Client (modal) */}
@@ -360,7 +398,15 @@ export default function ClientsPage() {
                 <div className="mb-2 grid grid-cols-3 gap-2">
                   <NumericInput label="Year (YYYY)" value={year} onChange={setYear} maxLength={4} placeholder="YYYY" focusColor="emerald" />
                   <NumericInput label="Month (MM)" value={month} onChange={setMonth} maxLength={2} placeholder="MM" focusColor="emerald" />
-                  <NumericInput label="Day (DD)" value={day} onChange={setDay} maxLength={2} placeholder="DD" focusColor="emerald" onEnter={() => dateValid && syncFromXero(formattedSince)} />
+                  <NumericInput
+                    label="Day (DD)"
+                    value={day}
+                    onChange={setDay}
+                    maxLength={2}
+                    placeholder="DD"
+                    focusColor="emerald"
+                    onEnter={() => dateValid && syncFromXero(formattedSince)}
+                  />
                 </div>
 
                 <div className="mb-3 text-xs text-gray-500">
@@ -374,7 +420,12 @@ export default function ClientsPage() {
                   <button
                     type="button"
                     className="rounded-lg px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-100"
-                    onClick={() => { setYear(""); setMonth(""); setDay(""); setDateOpen(false); }}
+                    onClick={() => {
+                      setYear("");
+                      setMonth("");
+                      setDay("");
+                      setDateOpen(false);
+                    }}
                   >
                     Cancel
                   </button>
@@ -404,7 +455,11 @@ export default function ClientsPage() {
         {/* Bulk toolbar */}
         <div className="mb-4 flex items-center justify-between rounded-xl border border-gray-200 bg-white px-4 py-3 shadow-sm">
           <div className="text-sm text-gray-600">
-            {selectedIds.size === 0 ? "No clients selected." : <><span className="font-medium">{selectedIds.size}</span> selected.</>}
+            {selectedIds.size === 0 ? "No clients selected." : (
+              <>
+                <span className="font-medium">{selectedIds.size}</span> selected.
+              </>
+            )}
           </div>
           <div className="flex items-center gap-2">
             {bulkErr && <div className="text-sm text-red-600">{bulkErr}</div>}
@@ -417,94 +472,90 @@ export default function ClientsPage() {
                   : "bg-blue-600 text-white ring-blue-300 hover:bg-blue-700"
               }`}
             >
-              {bulkSending ? (<><Spinner className="h-4 w-4" /> Sending emails…</>) : "Send email to selected clients"}
+              {bulkSending ? (
+                <>
+                  <Spinner className="h-4 w-4" /> Sending emails…
+                </>
+              ) : (
+                "Send email to selected clients"
+              )}
             </button>
           </div>
         </div>
-{/* Table (glassy & pale, analytics-style) */}
-<div className="rounded-2xl border border-sky-200/40 bg-sky-50/10 shadow-[0_30px_60px_-20px_rgba(2,6,23,0.25)] overflow-x-auto
-                supports-[backdrop-filter]:bg-sky-50/5 supports-[backdrop-filter]:backdrop-blur-md supports-[backdrop-filter]:backdrop-brightness-105 supports-[backdrop-filter]:backdrop-saturate-110">
-  {/* header row (6 columns) */}
-  <div className="grid grid-cols-6 gap-4 px-4 py-3 text-left text-sm font-semibold text-slate-900/90
-                  border-b border-sky-200/50 bg-sky-50/15 supports-[backdrop-filter]:bg-sky-50/10">
 
-    <div className="flex items-center gap-2">
-      <ClickTargetCheckbox
-        checked={allSelected}
-        onChange={(checked) => toggleSelectAll(checked)}
-        ariaLabel="Select all clients"
-      />
-      <span>Name</span>
-    </div>
-    <div>Email</div>
-    <div>Phone</div>
-    <div>Added</div>
-    <div className="text-center">Invoice Status</div>
-    <div className="text-center">Status</div>
-  </div>
-
-  {/* body */}
-  {loading || resolvingBiz ? (
-    <SkeletonRows cols={6} />
-  ) : empty ? (
-    <div className="p-6 text-sm text-gray-600">
-      No clients yet. Use <span className="font-medium">Add Client</span> or <span className="font-medium">Import from Xero</span> to get started.
-    </div>
-  ) : (
-    <ul className="divide-y divide-slate-200/70 bg-transparent">
-      {sortedClients.map((c) => {
-        const rowChecked = selectedIds.has(c.id);
-        return (
-          <li
-            key={c.id}
-            className={`grid grid-cols-6 gap-4 px-4 py-3 text-sm cursor-pointer transition-colors
-                        hover:bg-slate-500/5 focus:outline-none
-                        ${rowChecked ? "bg-blue-500/10" : ""}`}
-            role="button"
-            tabIndex={0}
-            onClick={() => setSelected(c)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                setSelected(c);
-              }
-            }}
-          >
-            {/* Name + checkbox */}
-            <div className="truncate font-medium text-slate-900 flex items-center gap-2">
-              <ClickTargetCheckbox
-                checked={rowChecked}
-                onChange={(checked) => toggleSelect(c.id, checked)}
-                ariaLabel={`Select ${c.name}`}
-                stopRowClick
-              />
-              <span className="truncate">{c.name}</span>
+        {/* Table (glassy & pale, analytics-style) */}
+        <div className="rounded-2xl border border-sky-200/40 bg-sky-50/10 shadow-[0_30px_60px_-20px_rgba(2,6,23,0.25)] overflow-x-auto supports-[backdrop-filter]:bg-sky-50/5 supports-[backdrop-filter]:backdrop-blur-md supports-[backdrop-filter]:backdrop-brightness-105 supports-[backdrop-filter]:backdrop-saturate-110">
+          {/* header row (6 columns) */}
+          <div className="grid grid-cols-6 gap-4 px-4 py-3 text-left text-sm font-semibold text-slate-900/90 border-b border-sky-200/50 bg-sky-50/15 supports-[backdrop-filter]:bg-sky-50/10">
+            <div className="flex items-center gap-2">
+              <ClickTargetCheckbox checked={allSelected} onChange={(checked) => toggleSelectAll(checked)} ariaLabel="Select all clients" />
+              <span>Name</span>
             </div>
+            <div>Email</div>
+            <div>Phone</div>
+            <div>Added</div>
+            <div className="text-center">Invoice Status</div>
+            <div className="text-center">Status</div>
+          </div>
 
-            <div className="truncate text-slate-800">{c.email || "—"}</div>
-            <div className="truncate text-slate-800">{c.phone_number || "—"}</div>
-            <div className="text-slate-800">{formatDateOnly(c.added_at)}</div>
-
-            {/* Invoice Status */}
-            <div className="justify-self-center self-center">
-              <InvoiceStatusBadge status={c.invoice_status} />
+          {/* body */}
+          {loading || resolvingBiz ? (
+            <SkeletonRows cols={6} />
+          ) : empty ? (
+            <div className="p-6 text-sm text-gray-600">
+              No clients yet. Use <span className="font-medium">Add Client</span> or{" "}
+              <span className="font-medium">Import from Xero</span> to get started.
             </div>
+          ) : (
+            <ul className="divide-y divide-slate-200/70 bg-transparent">
+              {sortedClients.map((c) => {
+                const rowChecked = selectedIds.has(c.id);
+                return (
+                  <li
+                    key={c.id}
+                    className={`grid grid-cols-6 gap-4 px-4 py-3 text-sm cursor-pointer transition-colors hover:bg-slate-500/5 focus:outline-none ${
+                      rowChecked ? "bg-blue-500/10" : ""
+                    }`}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => setSelected(c)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        setSelected(c);
+                      }
+                    }}
+                  >
+                    {/* Name + checkbox */}
+                    <div className="truncate font-medium text-slate-900 flex items-center gap-2">
+                      <ClickTargetCheckbox
+                        checked={rowChecked}
+                        onChange={(checked) => toggleSelect(c.id, checked)}
+                        ariaLabel={`Select ${c.name}`}
+                        stopRowClick
+                      />
+                      <span className="truncate">{c.name}</span>
+                    </div>
 
-            {/* Single Status cell */}
-            <div className="justify-self-center self-center">
-              <StatusCell
-                emailLastSentAt={c.email_last_sent_at}
-                clickAt={c.click_at}
-                submittedAt={c.review_submitted_at}
-              />
-            </div>
-          </li>
-        );
-      })}
-    </ul>
-  )}
-</div>
+                    <div className="truncate text-slate-800">{c.email || "—"}</div>
+                    <div className="truncate text-slate-800">{c.phone_number || "—"}</div>
+                    <div className="text-slate-800">{formatDateOnly(c.added_at)}</div>
 
+                    {/* Invoice Status */}
+                    <div className="justify-self-center self-center">
+                      <InvoiceStatusBadge status={c.invoice_status} />
+                    </div>
+
+                    {/* Single Status cell */}
+                    <div className="justify-self-center self-center">
+                      <StatusCell emailLastSentAt={c.email_last_sent_at} clickAt={c.click_at} submittedAt={c.review_submitted_at} />
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
       </div>
 
       {/* Row click → review modal */}
@@ -579,6 +630,10 @@ function NumericInput({
   focusColor?: "emerald" | "blue" | "sky";
   onEnter?: () => void;
 }) {
+  // map focus colors to concrete classes to avoid dynamic Tailwind pitfalls
+  const focusClass =
+    focusColor === "blue" ? "focus:border-blue-500" : focusColor === "sky" ? "focus:border-sky-500" : "focus:border-emerald-500";
+
   return (
     <input
       inputMode="numeric"
@@ -587,7 +642,7 @@ function NumericInput({
       placeholder={placeholder}
       value={value}
       onChange={(e) => onChange(e.target.value.replace(/\D/g, "").slice(0, maxLength))}
-      className={`w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:border-${focusColor}-500`}
+      className={`w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none ${focusClass}`}
       aria-label={label}
       onKeyDown={(e) => e.key === "Enter" && onEnter?.()}
     />
@@ -595,10 +650,14 @@ function NumericInput({
 }
 
 function SkeletonRows({ cols = 6 }: { cols?: number }) {
+  // map allowed grid columns (Tailwind-safe)
+  const gridColsClass =
+    cols === 6 ? "grid-cols-6" : cols === 5 ? "grid-cols-5" : cols === 4 ? "grid-cols-4" : cols === 3 ? "grid-cols-3" : "grid-cols-2";
+
   return (
     <div className="animate-pulse">
       {Array.from({ length: 6 }).map((_, i) => (
-        <div key={i} className={`grid grid-cols-${cols} gap-4 px-4 py-3`}>
+        <div key={i} className={`grid ${gridColsClass} gap-4 px-4 py-3`}>
           <div className="h-4 w-40 rounded bg-gray-200" />
           <div className="h-4 w-56 rounded bg-gray-200" />
           <div className="h-4 w-32 rounded bg-gray-200" />
@@ -634,9 +693,7 @@ function InvoiceStatusBadge({ status }: { status: Client["invoice_status"] }) {
   }
 
   return (
-    <span className={`inline-flex items-center justify-center rounded-full px-2 py-1 text-xs font-medium ring-1 ${styles}`}>
-      {label}
-    </span>
+    <span className={`inline-flex items-center justify-center rounded-full px-2 py-1 text-xs font-medium ring-1 ${styles}`}>{label}</span>
   );
 }
 
@@ -669,10 +726,7 @@ function StatusCell({
     const emailTime = emailLastSentAt ? new Date(emailLastSentAt).getTime() : null;
 
     if (clickTime !== null || emailTime !== null) {
-      const mostRecent =
-        clickTime !== null && emailTime !== null
-          ? Math.max(clickTime, emailTime)
-          : (clickTime ?? emailTime)!;
+      const mostRecent = clickTime !== null && emailTime !== null ? Math.max(clickTime, emailTime) : (clickTime ?? emailTime)!;
 
       if (clickTime !== null && mostRecent === clickTime) {
         label = "Button clicked";
@@ -688,9 +742,7 @@ function StatusCell({
 
   return (
     <div className="flex flex-col items-center">
-      <span className={`inline-flex items-center justify-center rounded-full px-2 py-1 text-xs font-medium ring-1 ${styles}`}>
-        {label}
-      </span>
+      <span className={`inline-flex items-center justify-center rounded-full px-2 py-1 text-xs font-medium ring-1 ${styles}`}>{label}</span>
       <span className="mt-1 text-[11px] text-gray-500">{when ?? "—"}</span>
     </div>
   );
@@ -711,20 +763,13 @@ function Modal({
       <div className="relative z-10 w-full max-w-xl rounded-2xl bg-white p-6 shadow-2xl">
         <div className="mb-4 flex items-start justify-between">
           <h2 className="text-lg font-semibold text-gray-800">{title}</h2>
-          <button
-            onClick={onClose}
-            className="rounded-md p-2 text-gray-500 hover:bg-gray-100 hover:text-gray-700"
-            aria-label="Close"
-          >
+          <button onClick={onClose} className="rounded-md p-2 text-gray-500 hover:bg-gray-100 hover:text-gray-700" aria-label="Close">
             ✕
           </button>
         </div>
         <div className="text-sm text-gray-800">{children}</div>
         <div className="mt-6 flex justify-end">
-          <button
-            onClick={onClose}
-            className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
-          >
+          <button onClick={onClose} className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700">
             Close
           </button>
         </div>
@@ -733,13 +778,7 @@ function Modal({
   );
 }
 
-function ReviewContent({
-  sentiment,
-  review,
-}: {
-  sentiment: Client["sentiment"];
-  review: string | null;
-}) {
+function ReviewContent({ sentiment, review }: { sentiment: Client["sentiment"]; review: string | null }) {
   const hint = useMemo(() => {
     const v = sentiment?.toLowerCase();
     if (v === "good") return "This client left a positive sentiment.";
@@ -756,11 +795,7 @@ function ReviewContent({
         </span>
       </div>
       <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 text-gray-800">
-        {review?.trim() ? (
-          <p className="whitespace-pre-wrap leading-relaxed">{review}</p>
-        ) : (
-          <p className="text-gray-500">No review text provided.</p>
-        )}
+        {review?.trim() ? <p className="whitespace-pre-wrap leading-relaxed">{review}</p> : <p className="text-gray-500">No review text provided.</p>}
       </div>
     </div>
   );

@@ -1,7 +1,7 @@
 // app/dashboard/[slug]/page.tsx
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { authClient } from "@/app/lib/auth-client";
@@ -202,8 +202,8 @@ export default function DashboardSlugClientPage() {
         // Expect created_at to be present (ISO string)
         const data = (await r.json()) as { businesses?: Business[] };
         setBiz(data.businesses ?? []);
-      } catch (e: any) {
-        if (!cancelled) setError(e?.message || "Could not load businesses.");
+      } catch (e: unknown) {
+        if (!cancelled) setError(e instanceof Error ? e.message : "Could not load businesses.");
       } finally {
         if (!cancelled) setLoading(false);
       }

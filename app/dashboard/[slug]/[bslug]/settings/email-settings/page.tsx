@@ -1,3 +1,4 @@
+// app/dashboard/[slug]/[bslug]/settings/email-settings/page.tsx
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -8,6 +9,15 @@ import { API } from "@/app/lib/constants";
 /* ============================ Helpers ============================ */
 const emailLooksValid = (s: string) => /^\S+@\S+\.\S+$/.test(s);
 const cap = (s?: string | null) => (s && s.trim() ? s.trim() : "");
+
+// Typed JSON helper to avoid implicit `any` from Response.json()
+async function safeJson<T>(res: Response): Promise<T> {
+  try {
+    return (await res.json()) as T;
+  } catch {
+    return {} as T;
+  }
+}
 
 /* ---------- Types from APIs ---------- */
 type BusinessIdLookupResp = {
@@ -31,6 +41,8 @@ type TemplateSaveResp = {
   email_subject: string;
   email_body: string;
 };
+
+type GenericResp = { error?: string; message?: string };
 
 /* ============================ Page ============================ */
 export default function BusinessEmailTemplateSettings() {
@@ -95,7 +107,7 @@ export default function BusinessEmailTemplateSettings() {
           body: JSON.stringify({ businessSlug: bslug }),
         });
 
-        const data = (await res.json().catch(() => ({}))) as BusinessIdLookupResp;
+        const data = await safeJson<BusinessIdLookupResp>(res);
         if (!alive) return;
 
         if (res.ok && data?.id) {
@@ -143,7 +155,7 @@ export default function BusinessEmailTemplateSettings() {
           body: JSON.stringify({ businessId }),
         });
 
-        const detailsData = (await detailsRes.json().catch(() => ({}))) as BusinessDetailsResp;
+        const detailsData = await safeJson<BusinessDetailsResp>(detailsRes);
 
         if (alive && detailsRes.ok) {
           const cleanName =
@@ -164,8 +176,7 @@ export default function BusinessEmailTemplateSettings() {
         } else if (alive && !detailsRes.ok) {
           setError("Could not load business details.");
           if (!testRecipientInitRef.current) {
-            const fallbackEmail =
-              cap(session?.user?.email) || "no-reply@upreview.app";
+            const fallbackEmail = cap(session?.user?.email) || "no-reply@upreview.app";
             setTestRecipient(fallbackEmail);
             testRecipientInitRef.current = true;
           }
@@ -179,7 +190,7 @@ export default function BusinessEmailTemplateSettings() {
           body: JSON.stringify({ businessId }),
         });
 
-        const tmplData = (await tmplRes.json().catch(() => ({}))) as TemplateGetResp;
+        const tmplData = await safeJson<TemplateGetResp>(tmplRes);
 
         if (alive) {
           if (!tmplRes.ok) {
@@ -201,8 +212,7 @@ export default function BusinessEmailTemplateSettings() {
         if (!alive) return;
         setError("Network error while loading business data.");
         if (!testRecipientInitRef.current) {
-          const fallbackEmail =
-            cap(session?.user?.email) || "no-reply@upreview.app";
+          const fallbackEmail = cap(session?.user?.email) || "no-reply@upreview.app";
           setTestRecipient(fallbackEmail);
           testRecipientInitRef.current = true;
         }
@@ -241,17 +251,15 @@ export default function BusinessEmailTemplateSettings() {
         }),
       });
 
-      const p: TemplateSaveResp | { error?: string; message?: string } =
-        await r.json().catch(() => ({} as any));
+      const p = await safeJson<TemplateSaveResp & GenericResp>(r);
 
       if (!r.ok) {
-        setError((p as any)?.message || (p as any)?.error || "Failed to save changes.");
+        setError(p.message ?? p.error ?? "Failed to save changes.");
         return;
       }
 
-      const saved = p as TemplateSaveResp;
-      setOrigSubject(saved.email_subject ?? subject);
-      setOrigBody(saved.email_body ?? body);
+      setOrigSubject(p.email_subject ?? subject);
+      setOrigBody(p.email_body ?? body);
       setMsg("Saved.");
     } catch {
       setError("Network error while saving.");
@@ -295,19 +303,19 @@ export default function BusinessEmailTemplateSettings() {
         }),
       });
 
-      const data = await res.json().catch(() => ({}));
+      const data = await safeJson<GenericResp>(res);
       if (!res.ok) {
-        const msg =
-          data?.error === "UNAUTHENTICATED"
-            ? "Please sign in to send a test email."
-            : data?.message || data?.error || "Failed to send test email.";
+        const msg = data?.error === "UNAUTHENTICATED"
+          ? "Please sign in to send a test email."
+          : data?.message || data?.error || "Failed to send test email.";
         throw new Error(msg);
       }
 
       setTestMsg(`Test email sent to ${to}.`);
       setTestIsError(false);
-    } catch (e: any) {
-      setTestMsg(e?.message || "Failed to send test email.");
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "Failed to send test email.";
+      setTestMsg(msg);
       setTestIsError(true);
     } finally {
       setTestSending(false);

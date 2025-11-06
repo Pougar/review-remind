@@ -1,4 +1,4 @@
-// app/api/update-google-link/route.ts
+// app/api/businesses/update-google-link/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { Pool } from "pg";
 import { auth } from "@/app/lib/auth";
@@ -6,22 +6,19 @@ import { auth } from "@/app/lib/auth";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-/** ---------- PG Pool (singleton across hot reloads) ---------- */
-declare global {
-  // eslint-disable-next-line no-var
-  var _pgPoolUpdateGoogleLink: Pool | undefined;
-}
+/** ---------- PG Pool (singleton across hot reloads; no eslint-disable, no `any`) ---------- */
+const globalForPg = globalThis as unknown as { _pgPoolUpdateGoogleLink?: Pool };
 function getPool(): Pool {
-  if (!global._pgPoolUpdateGoogleLink) {
+  if (!globalForPg._pgPoolUpdateGoogleLink) {
     const cs = process.env.DATABASE_URL;
     if (!cs) throw new Error("DATABASE_URL is not set");
-    global._pgPoolUpdateGoogleLink = new Pool({
+    globalForPg._pgPoolUpdateGoogleLink = new Pool({
       connectionString: cs,
       ssl: { rejectUnauthorized: false },
       max: 5,
     });
   }
-  return global._pgPoolUpdateGoogleLink;
+  return globalForPg._pgPoolUpdateGoogleLink;
 }
 
 /* ---------- Helpers ---------- */
@@ -30,10 +27,8 @@ const MAX_URL_LEN = 2048;
 const isUUID = (v?: string | null) => !!v && /^[0-9a-fA-F-]{36}$/.test(v);
 
 /**
- * Very light validation so you don't accidentally paste
- * facebook.com or some random URL.
- *
- * We accept common Google Maps / Google Business / g.page style hosts.
+ * Light validation so you don't accidentally paste a non-Google URL.
+ * Accept common Google Maps / Google Business / g.page styles.
  */
 function looksLikeGoogleReviewLink(urlStr?: string | null): boolean {
   if (!urlStr) return false;
@@ -66,9 +61,8 @@ export async function POST(req: NextRequest) {
   const db = await pool.connect();
 
   try {
-    const { businessId, googleBusinessLink } = (await req
-      .json()
-      .catch(() => ({}))) as ReqBody;
+    const { businessId, googleBusinessLink } =
+      ((await req.json().catch(() => ({}))) as ReqBody);
 
     // 1. Validate businessId
     if (!isUUID(businessId)) {
@@ -90,11 +84,6 @@ export async function POST(req: NextRequest) {
     await db.query(`SELECT set_config('app.user_id', $1, true)`, [userId]);
 
     // 3. Normalise and validate link
-    // Rules:
-    //  - If string: trim() + cap length
-    //  - If result is empty string → treat as null (clear it)
-    //  - If explicitly null from client → null (clear it)
-    //  - If non-null, must pass looksLikeGoogleReviewLink()
     let normalizedLink: string | null = null;
 
     if (typeof googleBusinessLink === "string") {
@@ -103,8 +92,7 @@ export async function POST(req: NextRequest) {
     } else if (googleBusinessLink === null) {
       normalizedLink = null;
     } else {
-      // if it's undefined, we treat as "clear" to keep behaviour predictable
-      normalizedLink = null;
+      normalizedLink = null; // undefined => clear
     }
 
     if (normalizedLink && !looksLikeGoogleReviewLink(normalizedLink)) {
@@ -120,10 +108,6 @@ export async function POST(req: NextRequest) {
 
     /**
      * 4. Update businesses.google_review_link
-     *
-     * IMPORTANT:
-     * Your live DB has a column called google_review_link (text/citext).
-     * That's what we're updating now.
      */
     const updateQ = await db.query<{
       id: string;
@@ -174,22 +158,21 @@ export async function POST(req: NextRequest) {
           updated_at: row.updated_at,
         },
       },
-      { status: 200 }
+      { status: 200, headers: { "Cache-Control": "no-store" } }
     );
-  } catch (err: any) {
+  } catch (err: unknown) {
     try {
       await db.query("ROLLBACK");
     } catch {
       /* ignore */
     }
-    console.error(
-      "[update-google-link] error:",
-      err?.stack || err?.message || err
-    );
+    const msg =
+      err instanceof Error ? err.stack ?? err.message : String(err);
+    console.error("[update-google-link] error:", msg);
 
     // common dev footgun: RLS not granting UPDATE on businesses to owner
-    const msg = String(err?.message || "").toLowerCase();
-    if (msg.includes("row-level security")) {
+    const lower = msg.toLowerCase();
+    if (lower.includes("row-level security")) {
       return NextResponse.json(
         {
           error: "RLS_BLOCKED",

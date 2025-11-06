@@ -23,6 +23,17 @@ export type AddClientModalProps = {
   onClose?: () => void;                       // optional (for modal usage)
 };
 
+/* ---------- helpers ---------- */
+function getErrorMessage(e: unknown): string {
+  if (e instanceof Error) return e.message;
+  if (typeof e === "string") return e;
+  try {
+    return JSON.stringify(e);
+  } catch {
+    return "Unknown error";
+  }
+}
+
 export default function AddClientForm({
   businessId,
   onSuccess,
@@ -47,9 +58,7 @@ export default function AddClientForm({
   const [err, setErr] = useState<string | null>(null);
   const [okMsg, setOkMsg] = useState<string | null>(null);
 
-  // Allow parent to fully control visibility in a modal context
-  if (!open) return null;
-
+  // compute after hooks are declared (no conditional hooks)
   const canSubmit = useMemo(
     () => !!businessId && !submitting,
     [businessId, submitting]
@@ -109,12 +118,15 @@ export default function AddClientForm({
         // fallback: go back to list
         router.push(`/${encodeURIComponent(slug)}/dashboard/${encodeURIComponent(bslug)}/clients`);
       }
-    } catch (e: any) {
-      setErr(e?.message || "Failed to add client.");
+    } catch (e: unknown) {
+      setErr(getErrorMessage(e) || "Failed to add client.");
     } finally {
       setSubmitting(false);
     }
   }
+
+  // respect `open` without conditional hooks
+  if (!open) return null;
 
   return (
     <div className="w-full max-w-2xl">
@@ -127,73 +139,71 @@ export default function AddClientForm({
         </header>
       )}
 
-      <form onSubmit={onSubmit} className="space-y-5" aria-disabled={!businessId}>
-        {/* Name */}
-        <div>
-          <label className="mb-1 block text-sm font-medium text-gray-700">Name *</label>
-          <input
-            type="text"
-            value={form.name}
-            onChange={update("name")}
-            className="w-full rounded-lg border border-gray-300 p-2 focus:border-blue-500 focus:outline-none"
-            placeholder="Jane Smith"
-            required
-            disabled={!businessId}
-          />
-        </div>
+      <form onSubmit={onSubmit} className="space-y-5">
+        {/* Disable the whole set when businessId is missing */}
+        <fieldset disabled={!businessId} className="space-y-5">
+          {/* Name */}
+          <div>
+            <label className="mb-1 block text-sm font-medium text-gray-700">Name *</label>
+            <input
+              type="text"
+              value={form.name}
+              onChange={update("name")}
+              className="w-full rounded-lg border border-gray-300 p-2 focus:border-blue-500 focus:outline-none"
+              placeholder="Jane Smith"
+              required
+            />
+          </div>
 
-        {/* Email */}
-        <div>
-          <label className="mb-1 block text-sm font-medium text-gray-700">Email</label>
-          <input
-            type="email"
-            value={form.email}
-            onChange={update("email")}
-            className="w-full rounded-lg border border-gray-300 p-2 focus:border-blue-500 focus:outline-none"
-            placeholder="jane@example.com"
-            disabled={!businessId}
-          />
-        </div>
+          {/* Email */}
+          <div>
+            <label className="mb-1 block text-sm font-medium text-gray-700">Email</label>
+            <input
+              type="email"
+              value={form.email}
+              onChange={update("email")}
+              className="w-full rounded-lg border border-gray-300 p-2 focus:border-blue-500 focus:outline-none"
+              placeholder="jane@example.com"
+            />
+          </div>
 
-        {/* Phone */}
-        <div>
-          <label className="mb-1 block text-sm font-medium text-gray-700">Phone number</label>
-          <input
-            type="tel"
-            value={form.phone_number}
-            onChange={update("phone_number")}
-            className="w-full rounded-lg border border-gray-300 p-2 focus:border-blue-500 focus:outline-none"
-            placeholder="+61 412 345 678"
-            disabled={!businessId}
-          />
-        </div>
+          {/* Phone */}
+          <div>
+            <label className="mb-1 block text-sm font-medium text-gray-700">Phone number</label>
+            <input
+              type="tel"
+              value={form.phone_number}
+              onChange={update("phone_number")}
+              className="w-full rounded-lg border border-gray-300 p-2 focus:border-blue-500 focus:outline-none"
+              placeholder="+61 412 345 678"
+            />
+          </div>
 
-        {/* Sentiment */}
-        <div>
-          <label className="mb-1 block text-sm font-medium text-gray-700">Sentiment</label>
-          <select
-            value={form.sentiment}
-            onChange={update("sentiment")}
-            className="w-full rounded-lg border border-gray-300 p-2 focus:border-blue-500 focus:outline-none"
-            disabled={!businessId}
-          >
-            <option value="unreviewed">Unreviewed</option>
-            <option value="good">Good</option>
-            <option value="bad">Bad</option>
-          </select>
-        </div>
+          {/* Sentiment */}
+          <div>
+            <label className="mb-1 block text-sm font-medium text-gray-700">Sentiment</label>
+            <select
+              value={form.sentiment}
+              onChange={update("sentiment")}
+              className="w-full rounded-lg border border-gray-300 p-2 focus:border-blue-500 focus:outline-none"
+            >
+              <option value="unreviewed">Unreviewed</option>
+              <option value="good">Good</option>
+              <option value="bad">Bad</option>
+            </select>
+          </div>
 
-        {/* Review */}
-        <div>
-          <label className="mb-1 block text-sm font-medium text-gray-700">Review</label>
-          <textarea
-            value={form.review}
-            onChange={update("review")}
-            className="min-h-[120px] w-full rounded-lg border border-gray-300 p-2 focus:border-blue-500 focus:outline-none"
-            placeholder="Write the client's review (optional)…"
-            disabled={!businessId}
-          />
-        </div>
+          {/* Review */}
+          <div>
+            <label className="mb-1 block text-sm font-medium text-gray-700">Review</label>
+            <textarea
+              value={form.review}
+              onChange={update("review")}
+              className="min-h-[120px] w-full rounded-lg border border-gray-300 p-2 focus:border-blue-500 focus:outline-none"
+              placeholder="Write the client's review (optional)…"
+            />
+          </div>
+        </fieldset>
 
         {/* Alerts */}
         {err && <p className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{err}</p>}

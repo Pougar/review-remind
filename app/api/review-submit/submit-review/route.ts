@@ -10,7 +10,6 @@ export const dynamic = "force-dynamic";
    PG Pool (singleton across HMR)
    ============================================================ */
 declare global {
-  // eslint-disable-next-line no-var
   var _pgPoolPublicSubmitReview: Pool | undefined;
 }
 
@@ -33,8 +32,7 @@ function getPool(): Pool {
 
 type ReviewType = "good" | "bad";
 
-const isUUID = (v?: string | null) =>
-  !!v && /^[0-9a-fA-F-]{36}$/.test(v);
+const isUUID = (v?: string | null) => !!v && /^[0-9a-fA-F-]{36}$/.test(v);
 
 const isClientIdPublicValid = (cid?: string | null) => {
   if (!cid) return false;
@@ -54,18 +52,25 @@ function badRequest(message: string, extra?: Record<string, unknown>) {
 }
 
 function forbidden(message: string) {
-  return NextResponse.json(
-    { error: "INVALID_TOKEN", message },
-    { status: 403 }
-  );
+  return NextResponse.json({ error: "INVALID_TOKEN", message }, { status: 403 });
 }
 
 function serverError(message = "Server error") {
-  return NextResponse.json(
-    { error: "SERVER_ERROR", message },
-    { status: 500 }
-  );
+  return NextResponse.json({ error: "SERVER_ERROR", message }, { status: 500 });
 }
+
+/* ============================================================
+   Types
+   ============================================================ */
+
+type Body = {
+  businessId?: string;
+  clientId?: string;
+  token?: string;
+  reviewType?: ReviewType;
+  review?: string;
+  stars?: number;
+};
 
 /* ============================================================
    Route
@@ -73,9 +78,9 @@ function serverError(message = "Server error") {
 
 export async function POST(req: Request) {
   // ---- parse body ----
-  let body: any;
+  let body: Body;
   try {
-    body = await req.json();
+    body = (await req.json()) as Body;
   } catch {
     return badRequest("Invalid JSON body.");
   }
@@ -310,15 +315,16 @@ export async function POST(req: Request) {
     await db.query("COMMIT");
 
     return NextResponse.json({ ok: true }, { status: 200 });
-  } catch (err: any) {
+  } catch (err: unknown) {
     try {
       await db.query("ROLLBACK");
     } catch {
       /* ignore */
     }
 
-    console.error("[POST /api/public/submit-review] error:", err?.stack || err);
-    const msg = String(err?.message || "").toLowerCase();
+    const e = err instanceof Error ? err : new Error(String(err));
+    console.error("[POST /api/public/submit-review] error:", e.stack ?? e);
+    const msg = (e.message || "").toLowerCase();
     if (msg.includes("row-level security")) {
       return serverError(
         "Permission denied by row-level security. Public review submission may need a relaxed policy."

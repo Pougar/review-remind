@@ -1,3 +1,4 @@
+// app/dashboard/[slug]/[bslug]/settings/review-settings/page.tsx
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -111,6 +112,15 @@ function parsePhrasesInput(raw: string): string[] {
   return out;
 }
 
+// Typed JSON helper to avoid implicit any from Response.json()
+async function safeJson<T>(res: Response): Promise<T> {
+  try {
+    return (await res.json()) as T;
+  } catch {
+    return {} as T;
+  }
+}
+
 /* ============================ Component ============================ */
 export default function ReviewSettingsPage() {
   const params = useParams() as { slug?: string; bslug?: string };
@@ -176,7 +186,7 @@ export default function ReviewSettingsPage() {
           body: JSON.stringify({ businessSlug: bslug }),
         });
 
-        const data = (await res.json().catch(() => ({}))) as BusinessIdLookupResp;
+        const data = await safeJson<BusinessIdLookupResp>(res);
         if (!alive) return;
 
         if (res.ok && data?.id) {
@@ -219,7 +229,7 @@ export default function ReviewSettingsPage() {
           cache: "no-store",
           body: JSON.stringify({ businessId }),
         });
-        const data = (await res.json().catch(() => ({}))) as BusinessDetailsResp;
+        const data = await safeJson<BusinessDetailsResp>(res);
         if (!alive) return;
         if (res.ok && data?.display_name) {
           setBusinessName(data.display_name.trim() || businessName);
@@ -256,13 +266,12 @@ export default function ReviewSettingsPage() {
           );
         }
 
-        const data: GetPhrasesExcerptsResp = await res
-          .json()
-          .catch(() => ({} as any));
-
+        const data = await safeJson<GetPhrasesExcerptsResp>(res);
         setPhrases(data?.phrases ?? []);
-      } catch (err: any) {
-        setLoadError(err?.message || "Failed to load phrases.");
+      } catch (err: unknown) {
+        const msg =
+          err instanceof Error ? err.message : "Failed to load phrases.";
+        setLoadError(msg);
       } finally {
         setLoading(false);
       }
@@ -337,7 +346,7 @@ export default function ReviewSettingsPage() {
           body: JSON.stringify(payload),
         });
 
-        const data: AddPhrasesResp = await res.json().catch(() => ({} as any));
+        const data = await safeJson<AddPhrasesResp>(res);
         if (!res.ok || data?.success === false) {
           throw new Error(data?.error || "Could not add phrases.");
         }
@@ -356,8 +365,10 @@ export default function ReviewSettingsPage() {
         setNewGoodPhraseInput("");
         await refreshAll();
         goodInputRef.current?.focus();
-      } catch (err: any) {
-        setAddGoodMsg(err?.message || "Could not add phrases.");
+      } catch (err: unknown) {
+        const msg =
+          err instanceof Error ? err.message : "Could not add phrases.";
+        setAddGoodMsg(msg);
         setAddGoodIsError(true);
       } finally {
         setAddingGood(false);
@@ -402,7 +413,7 @@ export default function ReviewSettingsPage() {
           body: JSON.stringify(payload),
         });
 
-        const data: AddPhrasesResp = await res.json().catch(() => ({} as any));
+        const data = await safeJson<AddPhrasesResp>(res);
         if (!res.ok || data?.success === false) {
           throw new Error(data?.error || "Could not add phrases.");
         }
@@ -421,8 +432,10 @@ export default function ReviewSettingsPage() {
         setNewBadPhraseInput("");
         await refreshAll();
         badInputRef.current?.focus();
-      } catch (err: any) {
-        setAddBadMsg(err?.message || "Could not add phrases.");
+      } catch (err: unknown) {
+        const msg =
+          err instanceof Error ? err.message : "Could not add phrases.";
+        setAddBadMsg(msg);
         setAddBadIsError(true);
       } finally {
         setAddingBad(false);
@@ -451,7 +464,7 @@ export default function ReviewSettingsPage() {
           }),
         });
 
-        const data: DeleteResp = await res.json().catch(() => ({} as any));
+        const data = await safeJson<DeleteResp>(res);
         if (!res.ok || data?.success !== true) {
           throw new Error(data?.error || "Could not delete phrase.");
         }
@@ -469,8 +482,10 @@ export default function ReviewSettingsPage() {
             phrase_text
           )}”${exCount ? ` and ${exCount} excerpt(s)` : ""}.`
         );
-      } catch (e: any) {
-        setDeleteMsg(e?.message || "Could not delete phrase.");
+      } catch (e: unknown) {
+        const msg =
+          e instanceof Error ? e.message : "Could not delete phrase.";
+        setDeleteMsg(msg);
         setDeleteIsError(true);
       } finally {
         setDeletingId(null);
@@ -497,24 +512,25 @@ export default function ReviewSettingsPage() {
         body: JSON.stringify({ businessId }),
       });
 
-      const data: GenerateNewPhrasesResp = await res
-        .json()
-        .catch(() => ({} as any));
+      const data = await safeJson<GenerateNewPhrasesResp>(res);
       if (!res.ok || data?.success === false) {
         throw new Error(data?.error || "Failed to generate phrases.");
       }
 
-      const items = (data?.new_phrases ?? []).map((x) => ({
-        phrase: x.phrase,
-        counts: x.counts ?? 0,
-        chosen: true,
-        sentiment: x.sentiment, // can be undefined
-      }));
+      const items =
+        (data?.new_phrases ?? []).map((x) => ({
+          phrase: x.phrase,
+          counts: x.counts ?? 0,
+          chosen: true,
+          sentiment: x.sentiment, // can be undefined
+        })) ?? [];
 
       setSuggestions(items);
       setGenOpen(true);
-    } catch (err: any) {
-      setGenError(err?.message || "Failed to generate phrases.");
+    } catch (err: unknown) {
+      const msg =
+        err instanceof Error ? err.message : "Failed to generate phrases.";
+      setGenError(msg);
       setGenOpen(true); // still open to show message
     } finally {
       setGenerating(false);
@@ -557,7 +573,7 @@ export default function ReviewSettingsPage() {
         }),
       });
 
-      const data: AddPhrasesResp = await res.json().catch(() => ({} as any));
+      const data = await safeJson<AddPhrasesResp>(res);
       if (!res.ok || data?.success === false) {
         throw new Error(data?.error || "Could not add selected phrases.");
       }
@@ -569,8 +585,10 @@ export default function ReviewSettingsPage() {
       setGenOpen(false);
       setSuggestions([]);
       setAcceptMsg(null);
-    } catch (err: any) {
-      setAcceptMsg(err?.message || "Could not add selected phrases.");
+    } catch (err: unknown) {
+      const msg =
+        err instanceof Error ? err.message : "Could not add selected phrases.";
+      setAcceptMsg(msg);
       setAcceptIsError(true);
     } finally {
       setAccepting(false);

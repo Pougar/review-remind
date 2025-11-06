@@ -20,9 +20,9 @@ export async function enforceBusinessOnboardingOrRedirect(params: {
   const { userId, slug, businessSlug } = params;
   if (!userId || !slug || !businessSlug) return;
 
-  // ✅ Works whether headers() is sync or async in your Next version
-  const hdrs = await Promise.resolve(headers() as any);
-  const cookie = hdrs?.get?.("cookie") ?? "";
+  // Typed: `headers()` returns ReadonlyHeaders; Promise.resolve keeps future-compat
+  const hdrs = await Promise.resolve(headers());
+  const cookie = hdrs.get("cookie") ?? "";
   const abs = (path: string) => `${baseUrl()}${path}`;
 
   // 1) Resolve businessId from slug

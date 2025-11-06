@@ -1,24 +1,31 @@
 // app/api/businesses/get-logo-url/route.ts
 import { NextRequest, NextResponse } from "next/server";
-import { Pool } from "pg";
+import { Pool, PoolClient } from "pg";
 import { auth } from "@/app/lib/auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+/** ---------- PG pool (singleton across HMR, no `any`) ---------- */
+const globalForPg = globalThis as unknown as { __pgPool?: Pool };
 const pool =
-  (globalThis as any).__pgPool ??
+  globalForPg.__pgPool ??
   new Pool({
     connectionString: process.env.DATABASE_URL,
     ssl: { rejectUnauthorized: true },
   });
-(globalThis as any).__pgPool = pool;
+globalForPg.__pgPool = pool;
 
+/** ---------- Types & helpers ---------- */
 type Body = {
   userId?: string;
   businessId?: string;
   businessSlug?: string;
 };
+
+type IdRow = { id: string };
+type PrefRow = { bid: string | null };
+type LogoRow = { url: string | null };
 
 const isNonEmpty = (v?: string) => typeof v === "string" && v.trim().length > 0;
 
@@ -26,19 +33,30 @@ const isNonEmpty = (v?: string) => typeof v === "string" && v.trim().length > 0;
 // If your URLs are static, feel free to bump this up.
 const DEFAULT_EXPIRES_IN_SECONDS = 300; // 5 minutes
 
-export async function POST(req: NextRequest) {
-  const body = (await req.json().catch(() => ({}))) as Body;
+async function readJson<T>(req: NextRequest): Promise<T | null> {
+  try {
+    return (await req.json()) as unknown as T;
+  } catch {
+    return null;
+  }
+}
 
-  let userId = body.userId?.trim();
-  const businessId = body.businessId?.trim();
-  const businessSlug = body.businessSlug?.trim();
+/** ---------- Route ---------- */
+export async function POST(req: NextRequest) {
+  const body = await readJson<Body>(req);
+
+  let userId = body?.userId?.trim();
+  const businessId = body?.businessId?.trim();
+  const businessSlug = body?.businessSlug?.trim();
 
   // Fallback to session if userId not provided
   if (!isNonEmpty(userId)) {
     try {
       const sess = await auth.api.getSession({ headers: req.headers });
-      userId = sess?.user?.id;
-    } catch {}
+      userId = sess?.user?.id ?? undefined;
+    } catch {
+      /* ignore */
+    }
   }
   if (!isNonEmpty(userId)) {
     return NextResponse.json(
@@ -47,8 +65,10 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const client = await pool.connect();
+  let client: PoolClient | null = null;
+
   try {
+    client = await pool.connect();
     await client.query("BEGIN");
     await client.query(`select set_config('app.user_id', $1, true)`, [userId]);
 
@@ -56,22 +76,20 @@ export async function POST(req: NextRequest) {
     let bid: string | null = null;
 
     if (isNonEmpty(businessId)) {
-      const res = await client.query(
+      const res = await client.query<IdRow>(
         `select id from public.businesses where id = $1 and deleted_at is null limit 1`,
         [businessId]
       );
-      const row = res.rows[0] as { id: string } | undefined;
-      bid = row?.id ?? null;
+      bid = res.rows[0]?.id ?? null;
     } else if (isNonEmpty(businessSlug)) {
-      const res = await client.query(
+      const res = await client.query<IdRow>(
         `select id from public.businesses where slug = $1 and deleted_at is null limit 1`,
         [businessSlug]
       );
-      const row = res.rows[0] as { id: string } | undefined;
-      bid = row?.id ?? null;
+      bid = res.rows[0]?.id ?? null;
     } else {
       // Fallback: use last_active_business_id, then default_business_id, then most recent
-      const res = await client.query(
+      const res = await client.query<PrefRow>(
         `
         with pref as (
           select coalesce(last_active_business_id, default_business_id) as bid
@@ -94,8 +112,7 @@ export async function POST(req: NextRequest) {
         `,
         [userId]
       );
-      const row = res.rows[0] as { bid: string | null } | undefined;
-      bid = row?.bid ?? null;
+      bid = res.rows[0]?.bid ?? null;
     }
 
     if (!bid) {
@@ -107,27 +124,31 @@ export async function POST(req: NextRequest) {
     }
 
     // Fetch the logo URL
-    const logoRes = await client.query(
+    const logoRes = await client.query<LogoRow>(
       `select company_logo_url as url from public.businesses where id = $1 limit 1`,
       [bid]
     );
     await client.query("COMMIT");
 
-    const logoRow = logoRes.rows[0] as { url: string | null } | undefined;
-    const url = logoRow?.url ?? null;
+    const url = logoRes.rows[0]?.url ?? null;
 
     return NextResponse.json(
       { url, expiresIn: DEFAULT_EXPIRES_IN_SECONDS, expiresAt: null },
       { headers: { "Cache-Control": "no-store" } }
     );
-  } catch (err) {
-    try { await client.query("ROLLBACK"); } catch {}
-    console.error("[/api/retrieve-logo-url] error:", err);
+  } catch (err: unknown) {
+    try {
+      if (client) await client.query("ROLLBACK");
+    } catch {
+      /* ignore */
+    }
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("[/api/businesses/get-logo-url] error:", msg);
     return NextResponse.json(
       { error: "INTERNAL", message: "Could not retrieve logo URL." },
       { status: 500 }
     );
   } finally {
-    client.release();
+    if (client) client.release();
   }
 }

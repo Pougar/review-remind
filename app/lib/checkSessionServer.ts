@@ -1,12 +1,37 @@
-// lib/checkSessionServer.ts
+// app/lib/checkSessionServer.ts
 import { auth } from "@/app/lib/auth";
 import { headers as nextHeaders } from "next/headers";
 
-/** Convert Next 15 ReadonlyHeaders (possibly Promise-wrapped) into Fetch Headers */
+/** Minimal shape we need from Next's ReadonlyHeaders */
+type HeaderLike = {
+  entries(): IterableIterator<[string, string]>;
+  get(name: string): string | null;
+};
+
+/** Convert Next ReadonlyHeaders into a standard Fetch Headers */
 async function getNodeHeaders(): Promise<Headers> {
-  const h = await Promise.resolve(nextHeaders() as any); // ReadonlyHeaders
-  return new Headers(Object.fromEntries(h.entries()));
+  // Works whether nextHeaders() is sync or treated promise-like
+  const h = (await Promise.resolve(nextHeaders())) as unknown as HeaderLike;
+  const out = new Headers();
+  for (const [k, v] of h.entries()) out.append(k, v);
+  return out;
 }
+
+type NameResponse = {
+  user?: {
+    id?: string;
+    name?: string;
+    slug?: string;
+    display_name?: string;
+    displayName?: string;
+  };
+  name?: string;
+  slug?: string;
+  display_name?: string;
+  displayName?: string;
+  message?: string;
+  error?: string;
+};
 
 export async function checkSessionServer(username: string) {
   const requestHeaders = await getNodeHeaders();
@@ -40,20 +65,19 @@ export async function checkSessionServer(username: string) {
     return { valid: false as const, reason: "Failed to fetch user name" };
   }
 
-  const payload: any = await nameRes.json().catch(() => ({}));
+  const payload = (await nameRes.json().catch(() => ({}))) as NameResponse;
 
-  // ✅ Accept either "name" or "slug" coming back from the API.
-  const urlSafeName: string | undefined =
-    payload?.user?.name ??
-    payload?.name ??
-    payload?.user?.slug ??
-    payload?.slug;
+  const urlSafeName =
+    payload.user?.name ??
+    payload.name ??
+    payload.user?.slug ??
+    payload.slug;
 
-  const displayName: string | undefined =
-    payload?.user?.display_name ??
-    payload?.display_name ??
-    payload?.user?.displayName ??
-    payload?.displayName;
+  const displayName =
+    payload.user?.display_name ??
+    payload.display_name ??
+    payload.user?.displayName ??
+    payload.displayName;
 
   if (!urlSafeName) {
     return { valid: false as const, reason: "No name found" };
