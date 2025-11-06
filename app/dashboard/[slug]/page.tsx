@@ -145,9 +145,25 @@ export default function DashboardSlugClientPage() {
   const [error, setError] = useState<string>("");
 
   const [displayName, setDisplayName] = useState<string>("");
+  const [signingOut, setSigningOut] = useState(false);
 
   const linkGoogleHref = `${ROUTES.DASHBOARD}/${encodeURIComponent(userSlug || "")}/add-business/link-google`;
   const userSettingsHref = `${ROUTES.DASHBOARD}/${encodeURIComponent(userSlug || "")}/user-settings`;
+
+  // NEW: sign out handler
+  const handleSignOut = async () => {
+    if (signingOut) return;
+    setSigningOut(true);
+    try {
+      await authClient.signOut?.();
+    } catch {
+      /* ignore */
+    } finally {
+      // Send to log-in page after sign out
+      router.replace(ROUTES.LOG_IN);
+      setSigningOut(false);
+    }
+  };
 
   // Fetch username for greeting
   useEffect(() => {
@@ -244,6 +260,17 @@ export default function DashboardSlugClientPage() {
             >
               User settings
             </Link>
+
+            {/* NEW: Sign out button (matching aesthetic) */}
+            <button
+              type="button"
+              onClick={handleSignOut}
+              disabled={signingOut}
+              aria-busy={signingOut}
+              className="inline-flex items-center gap-2 rounded-lg bg-white px-3 py-2 text-sm font-medium text-slate-900 shadow-md ring-1 ring-slate-300 hover:bg-slate-50 hover:ring-slate-400 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-400 disabled:opacity-60"
+            >
+              {signingOut ? "Signing out…" : "Sign out"}
+            </button>
           </div>
         </div>
 
