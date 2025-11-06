@@ -151,19 +151,21 @@ export default function DashboardSlugClientPage() {
   const userSettingsHref = `${ROUTES.DASHBOARD}/${encodeURIComponent(userSlug || "")}/user-settings`;
 
   // NEW: sign out handler
-  const handleSignOut = async () => {
-    if (signingOut) return;
-    setSigningOut(true);
-    try {
-      await authClient.signOut?.();
-    } catch {
-      /* ignore */
-    } finally {
-      // Send to log-in page after sign out
-      router.replace(ROUTES.LOG_IN);
-      setSigningOut(false);
-    }
-  };
+const handleSignOut = async () => {
+  if (signingOut) return;
+  setSigningOut(true);
+  try {
+    await authClient.signOut?.();
+  } catch {
+    /* ignore */
+  } finally {
+    // Hard redirect so cookies + middleware state are 100% in sync
+    window.location.assign("/");
+    // If you prefer SPA nav instead, use:
+    // router.replace("/");
+  }
+};
+
 
   // Fetch username for greeting
   useEffect(() => {
