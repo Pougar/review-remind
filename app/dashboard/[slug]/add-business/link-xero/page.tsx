@@ -1,0 +1,300 @@
+// app/dashboard/[slug]/add-business/link-xero/page.tsx
+"use client";
+
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
+import { authClient } from "@/app/lib/auth-client";
+import { API, ROUTES } from "@/app/lib/constants";
+
+const isUUID = (v?: string) => !!v && /^[0-9a-fA-F-]{36}$/.test(v);
+
+type Stage = "link_google" | "link-xero" | "onboarding" | "already_linked";
+
+export default function LinkXeroPage() {
+  const router = useRouter();
+  const params = useParams();
+  const search = useSearchParams();
+
+  // user slug from route
+  const slug = useMemo(
+    () => (Array.isArray(params?.slug) ? params!.slug[0] : (params?.slug as string)) || "",
+    [params]
+  );
+
+  // business id from query (?bid=…)
+  const businessId = search.get("bid") ?? "";
+
+  // After Xero is connected, where should we go?
+  const nextDest = useMemo(
+    () => `${ROUTES.DASHBOARD}/${encodeURIComponent(slug)}`,
+    [slug]
+  );
+
+  // BetterAuth session
+  const { data: session, isPending } = authClient.useSession();
+  const userId = session?.user?.id ?? "";
+
+  // UI state
+  const [statusMsg, setStatusMsg] = useState<string>("");
+  const [checking, setChecking] = useState(false);
+  const [connectDisabled, setConnectDisabled] = useState(false);
+  const navigatedRef = useRef(false); // prevent double navigations
+
+  // --- helpers ---
+
+  // Check current onboarding stage and route accordingly
+  const checkStageAndRoute = useCallback(async () => {
+    if (!isUUID(businessId)) return;
+
+    try {
+      const res = await fetch(API.CHECK_BUSINESS_STAGE, {
+        method: "POST",
+        credentials: "include",
+        cache: "no-store",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ businessId }),
+      });
+
+      const data = (await res.json().catch(() => ({}))) as { stage?: Stage; error?: string };
+      if (!res.ok) {
+        setStatusMsg(data?.error || "Could not check onboarding stage.");
+        return;
+      }
+
+      const stage = data.stage as Stage | undefined;
+      if (!stage) return;
+
+      if (navigatedRef.current) return;
+
+      switch (stage) {
+        case "link_google":
+          navigatedRef.current = true;
+          router.replace(`${ROUTES.DASHBOARD}/${encodeURIComponent(slug)}/add-business/link-google`);
+          return;
+
+        case "link-xero":
+          // Stay here — this is the correct page.
+          return;
+
+        case "onboarding":
+          navigatedRef.current = true;
+          router.replace(
+            `${ROUTES.DASHBOARD}/${encodeURIComponent(slug)}/add-business/business-details?bid=${encodeURIComponent(
+              businessId
+            )}`
+          );
+          return;
+
+        case "already_linked": {
+          // Need business slug to build /dashboard/[slug]/[business_slug]
+          try {
+            const r = await fetch(API.GET_BUSINESS_SLUG, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              credentials: "include",
+              cache: "no-store",
+              body: JSON.stringify({ businessId }),
+            });
+            const j = (await r.json().catch(() => ({}))) as { slug?: string };
+            const bizSlug = j?.slug;
+            navigatedRef.current = true;
+            router.replace(
+              bizSlug
+                ? `${ROUTES.DASHBOARD}/${encodeURIComponent(slug)}/${encodeURIComponent(bizSlug)}`
+                : nextDest // fallback if slug missing
+            );
+          } catch {
+            // fallback
+            navigatedRef.current = true;
+            router.replace(nextDest);
+          }
+          return;
+        }
+      }
+    } catch (e: any) {
+      setStatusMsg(e?.message || "Could not check onboarding stage.");
+    }
+  }, [businessId, router, slug, nextDest]);
+
+  const checkConnection = useCallback(async () => {
+    if (!userId || !businessId) return { connected: false, tenantCount: 0 };
+
+    setChecking(true);
+    setStatusMsg("Checking Xero connection…");
+    try {
+      // Your has-connection endpoint is POST and expects { userId, businessId }
+      const res = await fetch(API.XERO_HAS_CONNECTION, {
+        method: "POST",
+        credentials: "include",
+        cache: "no-store",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId, businessId }),
+      });
+
+      const data = (await res.json().catch(() => ({}))) as {
+        connected?: boolean;
+        tenantCount?: number;
+        error?: string;
+      };
+
+      const connected = !!data?.connected;
+      const tenantCount = data?.tenantCount ?? 0;
+
+      if (res.ok) {
+        setStatusMsg(
+          connected
+            ? `Xero connected ✓ ${tenantCount ? `(${tenantCount} org${tenantCount > 1 ? "s" : ""})` : ""}`
+            : "Not connected to Xero yet."
+        );
+      } else {
+        setStatusMsg(data?.error || "Could not verify Xero connection.");
+      }
+
+      return { connected, tenantCount };
+    } catch (e: any) {
+      setStatusMsg(e?.message || "Could not verify Xero connection.");
+      return { connected: false, tenantCount: 0 };
+    } finally {
+      setChecking(false);
+    }
+  }, [userId, businessId]);
+
+  // On mount: auth guard + stage check; then if we remain on link-xero, also show connection status
+  useEffect(() => {
+    if (isPending) return;
+
+    // auth guard
+    if (!userId) {
+      const here =
+        typeof window !== "undefined"
+          ? window.location.pathname + window.location.search
+          : `/dashboard/${encodeURIComponent(slug)}/add-business/link-xero?bid=${encodeURIComponent(businessId || "")}`;
+      router.replace(`${ROUTES.LOG_IN}?next=${encodeURIComponent(here)}`);
+      return;
+    }
+
+    if (!isUUID(businessId)) {
+      setStatusMsg("Missing or invalid business id.");
+      return;
+    }
+
+    // Stage check may move us away; if we stay, we’re on the correct step
+    void (async () => {
+      await checkStageAndRoute();
+      if (!navigatedRef.current) {
+        // We remained here (stage is link-xero) — show current connection status
+        void checkConnection();
+      }
+    })();
+  }, [isPending, userId, businessId, slug, checkStageAndRoute, checkConnection, router]);
+
+  // Kick off Xero flow
+  const onConnect = useCallback(async () => {
+    if (!userId || !isUUID(businessId)) return;
+    setStatusMsg("");
+    setConnectDisabled(true);
+    try {
+      // After success, we want to land on business-details with the bid intact
+      const callback = `/dashboard/${encodeURIComponent(slug)}/add-business/business-details?bid=${encodeURIComponent(
+        businessId
+      )}`;
+
+      const res = await fetch("/api/xero/connect-to-xero", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          userId,     // BetterAuth user id
+          businessId, // the business we’re connecting Xero to
+          callback,   // where the receiver should redirect after success
+        }),
+      });
+
+      if (!res.ok) {
+        const msg = await res.text().catch(() => "");
+        throw new Error(msg || "Failed to start Xero connect");
+      }
+
+      const { authorizeUrl } = (await res.json().catch(() => ({}))) as { authorizeUrl?: string };
+      if (!authorizeUrl) throw new Error("Missing authorize URL from server.");
+
+      const tab = window.open("", "_blank");
+      if (tab) {
+        try {
+          // @ts-ignore
+          tab.opener = null;
+        } catch {}
+        tab.location.href = authorizeUrl;
+      } else {
+        // fallback if popup blocked
+        window.location.href = authorizeUrl;
+      }
+    } finally {
+      setConnectDisabled(false);
+    }
+  }, [userId, businessId, slug]);
+
+  const disabled = isPending || !userId || !isUUID(businessId) || connectDisabled || checking;
+
+  return (
+    <div className="bg-white text-slate-900">
+      <div className="mx-auto w-full max-w-3xl px-6 py-12">
+        {/* Brand */}
+        <div className="mb-5">
+          <span className="rounded-md bg-slate-900 px-2 py-0.5 text-xs font-semibold text-white">
+            upreview
+          </span>
+        </div>
+
+        {/* Title & subtitle */}
+        <h1 className="text-2xl sm:text-3xl font-semibold tracking-tight">Link your Xero account</h1>
+        <p className="mt-2 text-sm text-slate-600">
+          Connect your Xero organisation so we can securely fetch invoices and keep your client list in sync.
+        </p>
+
+        {/* Status */}
+        <div className="mt-4 min-h-[1.25rem] text-sm" aria-live="polite">
+          {statusMsg}
+        </div>
+
+        {/* Actions */}
+        <div className="mt-6 space-y-4">
+          <button
+            type="button"
+            onClick={onConnect}
+            disabled={disabled}
+            aria-disabled={disabled}
+            className={`inline-flex items-center justify-center rounded-lg px-5 py-3 text-sm font-semibold transition
+              ${disabled ? "bg-slate-200 text-slate-500 cursor-not-allowed" : "bg-blue-600 text-white hover:bg-blue-700"}`}
+          >
+            Connect to Xero
+          </button>
+
+          <div className="flex items-center gap-3 text-sm">
+            <button
+              type="button"
+              onClick={() => void checkConnection()}
+              disabled={disabled}
+              className={`underline-offset-2 hover:underline ${
+                disabled ? "text-slate-400 cursor-not-allowed" : "text-slate-700"
+              }`}
+            >
+              {checking ? "Checking…" : "Recheck"}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => router.push(`${ROUTES.DASHBOARD}/${encodeURIComponent(slug)}`)}
+              className="text-slate-700 underline-offset-4 hover:underline"
+            >
+              Back to dashboard
+            </button>
+          </div>
+
+          <p className="pt-2 text-xs text-slate-500">
+            You can revoke access at any time in Xero. We only read invoice metadata needed for your workflow.
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
