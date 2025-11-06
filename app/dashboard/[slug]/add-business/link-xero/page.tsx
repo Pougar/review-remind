@@ -233,15 +233,8 @@ export default function LinkXeroPage() {
   const disabled = isPending || !userId || !isUUID(businessId) || connectDisabled || checking;
 
   return (
-    <div className="bg-white text-slate-900">
+    <div className="text-slate-900">
       <div className="mx-auto w-full max-w-3xl px-6 py-12">
-        {/* Brand */}
-        <div className="mb-5">
-          <span className="rounded-md bg-slate-900 px-2 py-0.5 text-xs font-semibold text-white">
-            upreview
-          </span>
-        </div>
-
         {/* Title & subtitle */}
         <h1 className="text-2xl sm:text-3xl font-semibold tracking-tight">Link your Xero account</h1>
         <p className="mt-2 text-sm text-slate-600">

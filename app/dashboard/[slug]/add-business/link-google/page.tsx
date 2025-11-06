@@ -170,14 +170,8 @@ export default function LinkGooglePage() {
   }, [isPending, userId, userSlug, router]);
 
   return (
-    <div className="bg-white text-slate-900">
+    <div className="text-slate-900">
       <div className="mx-auto w-full max-w-3xl px-6 py-12">
-        {/* Brand */}
-        <div className="mb-5">
-          <span className="rounded-md bg-slate-900 px-2 py-0.5 text-xs font-semibold text-white">
-            upreview
-          </span>
-        </div>
 
         <h1 className="text-2xl sm:text-3xl font-semibold tracking-tight">Link your Google account</h1>
         <p className="mt-2 text-sm text-slate-600">

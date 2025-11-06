@@ -143,29 +143,32 @@ export default function DashboardSlugClientPage() {
   const [loading, setLoading] = useState(true);
   const [biz, setBiz] = useState<Business[]>([]);
   const [error, setError] = useState<string>("");
-
   const [displayName, setDisplayName] = useState<string>("");
   const [signingOut, setSigningOut] = useState(false);
 
   const linkGoogleHref = `${ROUTES.DASHBOARD}/${encodeURIComponent(userSlug || "")}/add-business/link-google`;
   const userSettingsHref = `${ROUTES.DASHBOARD}/${encodeURIComponent(userSlug || "")}/user-settings`;
 
-  // NEW: sign out handler
-const handleSignOut = async () => {
-  if (signingOut) return;
-  setSigningOut(true);
-  try {
-    await authClient.signOut?.();
-  } catch {
-    /* ignore */
-  } finally {
-    // Hard redirect so cookies + middleware state are 100% in sync
-    window.location.assign("/");
-    // If you prefer SPA nav instead, use:
-    // router.replace("/");
-  }
-};
-
+  // FIXED: use the same working BetterAuth pattern
+  const handleSignOut = async () => {
+    if (signingOut) return;
+    setSigningOut(true);
+    try {
+      await authClient.signOut({
+        fetchOptions: {
+          // Only navigate once the server confirms sign-out
+          onSuccess: () => {
+            // go to homepage after logout
+            window.location.assign("/");
+            // or: router.push("/"); if you prefer SPA nav
+          },
+        },
+      });
+    } catch (err) {
+      console.error("Sign out failed", err);
+      setSigningOut(false);
+    }
+  };
 
   // Fetch username for greeting
   useEffect(() => {
@@ -217,11 +220,12 @@ const handleSignOut = async () => {
           throw new Error(txt || "Failed to load businesses.");
         }
 
-        // Expect created_at to be present (ISO string)
         const data = (await r.json()) as { businesses?: Business[] };
         setBiz(data.businesses ?? []);
       } catch (e: unknown) {
-        if (!cancelled) setError(e instanceof Error ? e.message : "Could not load businesses.");
+        if (!cancelled) {
+          setError(e instanceof Error ? e.message : "Could not load businesses.");
+        }
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -263,7 +267,7 @@ const handleSignOut = async () => {
               User settings
             </Link>
 
-            {/* NEW: Sign out button (matching aesthetic) */}
+            {/* Fixed: Sign out button using correct BetterAuth flow */}
             <button
               type="button"
               onClick={handleSignOut}
@@ -278,7 +282,6 @@ const handleSignOut = async () => {
 
         {/* Content */}
         <section className="mt-8">
-          {/* Loading & error states */}
           {loading ? (
             <div className="py-8 text-sm text-slate-600">Loading your businesses…</div>
           ) : error ? (
@@ -290,13 +293,12 @@ const handleSignOut = async () => {
             </div>
           ) : biz.length === 0 ? (
             <>
-              {/* Get started bubble only when there are no businesses */}
               <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
                 <h2 className="text-sm font-semibold text-amber-900">Get started</h2>
-                <p className="mt-1 text-sm text-amber-900/90">Add a business to start pulling reviews and insights.</p>
+                <p className="mt-1 text-sm text-amber-900/90">
+                  Add a business to start pulling reviews and insights.
+                </p>
               </div>
-
-              {/* Centered Add button in empty state */}
               <div className="mt-6 flex justify-center">
                 <button
                   onClick={() => router.push(linkGoogleHref)}
@@ -308,15 +310,14 @@ const handleSignOut = async () => {
             </>
           ) : (
             <>
-              {/* Table only (no outer card) — increased contrast */}
               <div className="overflow-hidden rounded-2xl bg-white shadow-xl ring-1 ring-slate-300">
                 <table className="min-w-full divide-y divide-slate-200">
                   <thead className="bg-slate-50/90">
                     <tr className="text-left text-xs font-semibold uppercase tracking-wide text-slate-700">
                       <th className="px-4 py-3">Business</th>
                       <th className="px-4 py-3">Slug</th>
-                      <th className="px-4 py-3">Date Added</th>{/* NEW */}
-                      <th className="px-4 py-3"></th>
+                      <th className="px-4 py-3">Date Added</th>
+                      <th className="px-4 py-3" />
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 bg-white">
@@ -343,7 +344,9 @@ const handleSignOut = async () => {
                           {formatAdded(b.created_at)}
                         </td>
                         <td className="px-4 py-3 text-right">
-                          <span className="inline-flex items-center text-sm font-medium text-slate-400">→</span>
+                          <span className="inline-flex items-center text-sm font-medium text-slate-400">
+                            →
+                          </span>
                         </td>
                       </tr>
                     ))}
@@ -351,7 +354,6 @@ const handleSignOut = async () => {
                 </table>
               </div>
 
-              {/* Centered Add button below the table */}
               <div className="mt-6 flex justify-center">
                 <button
                   onClick={() => router.push(linkGoogleHref)}

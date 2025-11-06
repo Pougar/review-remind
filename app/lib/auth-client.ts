@@ -1,6 +1,7 @@
-import { createAuthClient } from "better-auth/react"
+// app/lib/auth-client.ts
+"use client";
 
-export const authClient = createAuthClient({
-    /** The base URL of the server (optional if you're using the same domain) */
-    baseURL: "https://www.upreview.com.au",
-})
+import { createAuthClient } from "better-auth/react";
+
+export const authClient = createAuthClient();
+// no baseURL → it uses window.location.origin in the browser

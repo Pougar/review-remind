@@ -153,36 +153,6 @@ function inferIndexFromPath(pathname?: string | null): number {
   return 1;
 }
 
-/* ======================== Full-width top stepper bar ======================== */
-function TopStepperBar({ current, labels }: { current: number; labels: readonly string[] }) {
-  return (
-    <div
-      className="
-        sticky top-0 z-30 w-screen
-        bg-white/30 backdrop-blur supports-[backdrop-filter]:bg-white/25
-      "
-      role="region"
-      aria-label="Onboarding progress"
-    >
-      <div className="relative w-full py-3">
-        {/* Brand at extreme left, vertically centered with the stepper */}
-        <div className="absolute left-3 top-1/2 -translate-y-1/2">
-          <span className="rounded-md bg-slate-900 px-2 py-0.5 text-xs font-semibold text-white align-middle">
-            upreview
-          </span>
-          <span className="ml-2 hidden sm:inline text-xs text-slate-700 align-middle">
-            Business onboarding
-          </span>
-        </div>
-
-        {/* Full-width Stepper (edge-to-edge) */}
-        <Stepper current={current} labels={labels} />
-      </div>
-    </div>
-  );
-}
-
-/* ======================== Page ======================== */
 export default function AddBusinessLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -254,6 +224,8 @@ export default function AddBusinessLayout({ children }: { children: React.ReactN
   }, [doCheck]);
 
   const currentIdx = useMemo(() => inferIndexFromPath(pathname), [pathname]); // 1-based
+
+  // Cancel target
   const cancelHref = slug ? `/dashboard/${encodeURIComponent(slug)}` : "/dashboard";
 
   return (
@@ -262,76 +234,83 @@ export default function AddBusinessLayout({ children }: { children: React.ReactN
       <BackgroundSea />
       <ReviewsWaterfallBackdrop />
 
-      {/* FULL-WIDTH TOP STEPPER */}
-      <TopStepperBar current={currentIdx} labels={STEP_LABELS} />
+      <header className="sticky top-0 z-20 border-b border-slate-200">
+        <div className="mx-auto max-w-6xl w-full">
+          <div className="flex items-center justify-between gap-4 py-3">
+            {/* Left: Brand */}
+            <div className="flex items-center gap-2">
+              <span className="rounded-md bg-slate-900 px-2 py-0.5 text-xs font-semibold text-white">
+                upreview
+              </span>
+              <span className="hidden sm:inline text-xs text-slate-500">Business onboarding</span>
+            </div>
 
-      {/* Secondary header (below stepper) */}
-      <div className="sticky top-[2.75rem] z-20 border-b border-slate-200 bg-white/80 backdrop-blur supports-[backdrop-filter]:bg-white/60">
-        <div className="mx-auto max-w-6xl w-full px-4 sm:px-6">
-          <div className="flex items-center justify-end gap-3 py-2">
-            <button
-              type="button"
-              onClick={() => router.push(cancelHref)}
-              className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-800 hover:bg-slate-50"
-            >
-              Cancel
-            </button>
-            <div className="sm:hidden text-xs font-medium text-slate-700">
-              {checking ? "Checking…" : `Step ${currentIdx} of ${STEP_LABELS.length}`}
+            {/* Right: Cancel + (mobile) progress text */}
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() => router.push(cancelHref)}
+                className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-800 hover:bg-slate-50"
+              >
+                Cancel
+              </button>
+              <div className="sm:hidden text-xs font-medium text-slate-700">
+                {checking ? "Checking…" : `Step ${currentIdx} of ${STEP_LABELS.length}`}
+              </div>
             </div>
           </div>
-          <p className="hidden sm:block pb-2 text-center text-xs font-medium text-slate-600" aria-live="polite">
-            {checking
-              ? "Checking…"
-              : err
-              ? "Couldn’t verify progress — you can continue."
-              : `Step ${currentIdx} of ${STEP_LABELS.length}`}
-          </p>
+
+          <div className="pb-3">
+            <Stepper current={currentIdx} labels={[...STEP_LABELS]} />
+            <p className="mt-1 hidden sm:block text-center text-xs font-medium text-slate-600" aria-live="polite">
+              {checking
+                ? "Checking…"
+                : err
+                ? "Couldn’t verify progress — you can continue."
+                : `Step ${currentIdx} of ${STEP_LABELS.length}`}
+            </p>
+          </div>
         </div>
-      </div>
+      </header>
 
       <main className="flex-1">{children}</main>
     </div>
   );
 }
 
-/* ======================== Full-width Stepper ======================== */
 function Stepper({ current, labels }: { current: number; labels: readonly string[] }) {
   const total = labels.length;
   const clamped = Math.max(1, Math.min(current, total));
   const ratio = total <= 1 ? 1 : (clamped - 1) / (total - 1);
 
   return (
-    <div className="relative h-10 w-full">
-      {/* Track (edge-to-edge) */}
-      <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 h-1 rounded-full bg-slate-300/50" />
-      {/* Progress */}
+    <div className="relative">
+      <div className="absolute left-4 right-4 top-1/2 -translate-y-1/2 h-1 rounded-full bg-slate-200" />
       <div
-        className="absolute left-0 top-1/2 -translate-y-1/2 h-1 rounded-full bg-gradient-to-r from-blue-600 via-indigo-600 to-emerald-600 transition-[width]"
-        style={{ width: `calc(${ratio * 100}% )` }}
+        className="absolute left-4 top-1/2 -translate-y-1/2 h-1 rounded-full bg-gradient-to-r from-blue-600 via-indigo-600 to-emerald-600 transition-[width]"
+        style={{ width: `calc(${ratio * 100}% - 0rem)` }}
       />
-      {/* Markers (evenly spaced) */}
       <div
-        className="absolute inset-x-0 top-0 mx-3"
-        style={{ display: "grid", gridTemplateColumns: `repeat(${total}, minmax(0,1fr))` }}
+        className="relative mx-4"
+        style={{ display: "grid", gridTemplateColumns: `repeat(${total}, minmax(0,1fr))`, gap: "0.5rem" }}
       >
         {labels.map((label, idx) => {
           const step = idx + 1;
           const state = step < clamped ? "complete" : step === clamped ? "current" : "upcoming";
           const badgeBase =
-            "mx-auto mt-1 flex h-8 w-8 items-center justify-center rounded-full text-[11px] font-bold ring-2 transition";
+            "flex h-8 w-8 items-center justify-center rounded-full text-[11px] font-bold ring-2 transition";
           const badgeStyles =
             state === "complete"
               ? "bg-emerald-600 text-white ring-emerald-300 shadow-sm"
               : state === "current"
               ? "bg-blue-600 text-white ring-blue-300 shadow-sm"
-              : "bg-slate-200/80 text-slate-600 ring-slate-300/80";
+              : "bg-slate-200 text-slate-600 ring-slate-300";
           return (
-            <div key={label} className="flex flex-col items-center gap-1 text-center select-none">
+            <div key={label} className="flex flex-col items-center gap-1 py-1 text-center">
               <div className={`${badgeBase} ${badgeStyles}`} aria-current={state === "current" ? "step" : undefined}>
                 {step}
               </div>
-              <span className="line-clamp-1 px-2 text-[11px] text-slate-700/90">{label}</span>
+              <span className="line-clamp-1 text-[11px] text-slate-600">{label}</span>
             </div>
           );
         })}
