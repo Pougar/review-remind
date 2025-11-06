@@ -22,7 +22,7 @@ pool.on("connect", (client) => {
 export const auth = betterAuth({
   database: pool,
   emailAndPassword: { enabled: true },
-  trustedOrigins: ["http://localhost:3000", "*.vercel.app", "https://your-production-domain.com"],
+  trustedOrigins: ["http://localhost:3000", "*.vercel.app", "https://www.upreview.com.au/"],
   plugins: [nextCookies()],
   account: {
         accountLinking: {

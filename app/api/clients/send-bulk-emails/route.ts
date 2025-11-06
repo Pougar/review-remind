@@ -35,7 +35,7 @@ const TOKEN_SECRET: string = RAW_TOKEN_SECRET;
 
 const BASE_URL =
   process.env.APP_ORIGIN /* e.g. https://your-prod-domain.com */ ||
-  "http://localhost:3000";
+  "https://www.upreview.com.au";
 
 /* ---------- Helpers ---------- */
 function escapeHtml(s: string) {

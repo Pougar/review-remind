@@ -79,7 +79,7 @@ const CUSTOMER_TOKEN_REGEX = /\[customer\]/gi;
 // Where the CTA buttons in the email should send people
 const BASE_URL =
   process.env.APP_ORIGIN /* e.g. https://yourdomain.com */ ||
-  "http://localhost:3000";
+  "https://www.upreview.com.au";
 
 /* ============================================================
    Types

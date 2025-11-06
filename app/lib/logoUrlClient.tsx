@@ -26,7 +26,7 @@ async function fetchSigned(userId: string) {
 
 function addCacheBuster(u: string) {
   try {
-    const base = typeof window !== "undefined" ? window.location.origin : "http://localhost";
+    const base = typeof window !== "undefined" ? window.location.origin : "https://www.upreview.com.au";
     const url = new URL(u, base);
     url.searchParams.set("cb", String(Date.now()));
     return url.pathname + url.search + url.hash;

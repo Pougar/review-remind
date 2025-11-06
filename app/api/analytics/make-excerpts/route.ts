@@ -143,7 +143,7 @@ export async function POST(req: NextRequest) {
       return p.phrase;
     });
 
-    // ----- 2. Collect review text for this business
+    // ----- 2. Collect review text for this business (NO CAP)
 
     // Internal reviews
     const internalQ = await db.query<{
@@ -214,10 +214,9 @@ export async function POST(req: NextRequest) {
       })),
     ].filter((row) => row.text.length > 0);
 
-    // sort by ts, keep top 100, then pick only needed fields (avoid unused `ts`)
+    // sort by ts, then pick only needed fields (avoid unused `ts`) — NO CAP on count
     const inputs: InputItem[] = inputsWithTs
       .sort((a, b) => b.ts - a.ts)
-      .slice(0, 100)
       .map((o) => ({
         id: o.id,
         source: o.source,
@@ -245,7 +244,9 @@ export async function POST(req: NextRequest) {
       inputs.filter((i) => i.source === "google_reviews").map((i) => i.id)
     );
 
-    // ----- 3. Build Gemini prompt
+    /* ============================================================
+       3. Build Gemini prompt  ✅ ENFORCE DOMINANT SENTIMENT & NO CAP
+    ============================================================ */
     const modelInput = {
       business_id: businessId,
       phrases: phraseList,
@@ -259,18 +260,30 @@ export async function POST(req: NextRequest) {
     };
 
     const instructions = `
-Task: For each provided phrase, return 3–6 short excerpts (≈1 sentence) directly pulled from the reviews where that phrase is clearly mentioned.
+Task:
+For each provided phrase, scan ALL provided reviews and (a) determine the phrase's DOMINANT sentiment ("good" vs "bad") based on how the phrase is used across the reviews, then (b) return EVERY matching excerpt (NO LIMIT) that clearly expresses that SAME dominant sentiment. Do NOT include excerpts whose sentiment does not match the phrase's dominant sentiment.
 
-Rules:
-- ONLY use the phrases provided in "phrases" (do not invent new phrases).
-- Each excerpt object MUST include:
-  - "excerpt": short snippet of review text (no PII, keep it ~1 sentence).
-  - "sentiment": "good" | "bad".
-  - "review_id": MUST match an "id" from the provided reviews list.
-  - "is_unlinked_google": true iff that review came from source "google_reviews".
-- If sentiment is ambiguous, skip that excerpt.
-- Use star ratings as a hint (5★ is rarely "bad"; ≤2★ is rarely "good").
-- Output MUST be valid JSON. No markdown fences.
+How to determine "dominant" sentiment for a phrase:
+- Count how many CLEARLY positive mentions of the phrase exist vs clearly negative mentions in the provided reviews.
+- Positive/negative may use both text sentiment and star hints (5★ usually good; 1–2★ usually bad; 3★ neutral).
+- If positives > negatives → dominant = "good". If negatives > positives → dominant = "bad". If tied, prefer "good".
+- If the phrase is not clearly present in any review, return an empty array of excerpts for that phrase.
+
+Excerpts (NO LIMIT):
+- Return an excerpt for EVERY distinct mention of the phrase.
+- If a single review mentions the phrase multiple times, you MAY include MULTIPLE excerpts from that single review (one per distinct mention). Avoid duplicate/near-duplicate excerpts for the same mention.
+- Excerpts must be SHORT (≈1 sentence), a direct VERBATIM substring of the review text, and MUST NOT contain PII.
+- Each excerpt must include:
+  - "excerpt": the copied snippet,
+  - "sentiment": "good" or "bad" matching the phrase's dominant sentiment,
+  - "review_id": an ID that exists in the provided reviews,
+  - "is_unlinked_google": true iff that review's source is "google_reviews".
+- If the sentiment of a potential excerpt is ambiguous/neutral, SKIP it.
+
+Hard constraints:
+- ONLY use phrases from the "phrases" list; do NOT invent new phrases.
+- For each phrase, include ONLY excerpts whose "sentiment" matches that phrase's dominant sentiment (enforce this strictly).
+- Output MUST be valid JSON with no markdown fences.
 
 STRICT OUTPUT SHAPE:
 {
@@ -279,7 +292,7 @@ STRICT OUTPUT SHAPE:
       "phrase": "<MUST MATCH one of the provided phrases exactly>",
       "excerpts": [
         {
-          "excerpt": "<short sentence excerpt>",
+          "excerpt": "<short sentence excerpt (verbatim)>",
           "sentiment": "good" | "bad",
           "review_id": "<id from input.reviews[i].id>",
           "is_unlinked_google": true | false
@@ -291,7 +304,7 @@ STRICT OUTPUT SHAPE:
     `.trim();
 
     const prompt = `
-You are extracting example excerpts for marketing / QA dashboards.
+You are extracting example excerpts for marketing / QA dashboards. Follow the constraints exactly.
 
 INPUT:
 ${JSON.stringify(modelInput, null, 2)}
@@ -331,7 +344,7 @@ ${instructions}
       return NextResponse.json({ error: "BAD_MODEL_SHAPE" }, { status: 502 });
     }
 
-    // ----- 6. Sanitize Gemini output
+    // ----- 6. Sanitize Gemini output (NO CAP on per-phrase excerpts)
     const cleanGroups: {
       phrase_id: string;
       phrase: string;
@@ -361,7 +374,8 @@ ${instructions}
         is_unlinked_google: boolean;
       }[] = [];
 
-      for (const ex of normalized.slice(0, 6)) {
+      // NO CAP: accept all excerpts returned by model (we still validate each)
+      for (const ex of normalized) {
         const rid = String(ex?.review_id ?? "").trim();
         if (!rid) continue;
 
