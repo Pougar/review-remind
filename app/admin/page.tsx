@@ -3,7 +3,9 @@
 
 import { useCallback, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { API } from "../lib/constants";
+import { API } from "@/app/lib/constants";
+
+type AdminAuthorizeResponse = { message?: string };
 
 export default function AdminGatePage() {
   const qs = useSearchParams();
@@ -26,27 +28,37 @@ export default function AdminGatePage() {
   }, [qs]);
 
   const unlock = useCallback(async () => {
-    setBusy(true);
-    setMsg(null);
+  setBusy(true);
+  setMsg(null);
+  try {
+    const r = await fetch(API.AUTHORIZE_ADMIN, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(code ? { code } : {}),
+    });
+
+    // Parse JSON safely without `any`
+    let j: AdminAuthorizeResponse = {};
     try {
-      const r = await fetch(API.AUTHORIZE_ADMIN, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(code ? { code } : {}),
-      });
-      const j = await r.json().catch(() => ({} as any));
-      if (!r.ok) {
-        setMsg(j?.message || "Not allowed.");
-        return;
-      }
-      // Success: cookie set server-side; send them to the desired page
-      window.location.assign(nextTarget);
-    } catch (e: any) {
-      setMsg(e?.message || "Failed to unlock.");
-    } finally {
-      setBusy(false);
+      j = (await r.json()) as unknown as AdminAuthorizeResponse;
+    } catch {
+      // non-JSON or empty body; ignore
     }
-  }, [code, nextTarget]);
+
+    if (!r.ok) {
+      setMsg(j.message ?? "Not allowed.");
+      return;
+    }
+
+    // Success: cookie set server-side; send them to the desired page
+    window.location.assign(nextTarget);
+  } catch (e: unknown) {
+    const errMsg = e instanceof Error ? e.message : "Failed to unlock.";
+    setMsg(errMsg);
+  } finally {
+    setBusy(false);
+  }
+}, [code, nextTarget]);
 
   const onSubmit = useCallback(
     (e: React.FormEvent) => {

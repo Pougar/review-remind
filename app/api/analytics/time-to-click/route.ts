@@ -1,24 +1,21 @@
 // app/api/analytics/avg-email-to-click/route.ts
 import { NextRequest, NextResponse } from "next/server";
-import { Pool } from "pg";
+import { Pool, PoolClient } from "pg";
 import { auth } from "@/app/lib/auth";
 
-/** ---------- PG Pool (singleton across HMR) ---------- */
-declare global {
-  // eslint-disable-next-line no-var
-  var _pgPoolAvgEmailToClick: Pool | undefined;
-}
+/** ---------- PG Pool (singleton across HMR, no `var`) ---------- */
+const globalForPg = globalThis as unknown as { _pgPoolAvgEmailToClick?: Pool };
 function getPool(): Pool {
-  if (!global._pgPoolAvgEmailToClick) {
+  if (!globalForPg._pgPoolAvgEmailToClick) {
     const cs = process.env.DATABASE_URL;
     if (!cs) throw new Error("DATABASE_URL is not set");
-    global._pgPoolAvgEmailToClick = new Pool({
+    globalForPg._pgPoolAvgEmailToClick = new Pool({
       connectionString: cs,
       ssl: { rejectUnauthorized: true }, // set false only if your Neon certs aren't configured
       max: 5,
     });
   }
-  return global._pgPoolAvgEmailToClick;
+  return globalForPg._pgPoolAvgEmailToClick;
 }
 
 export const runtime = "nodejs";
@@ -32,13 +29,25 @@ type Row = {
   avg_seconds: string | null;  // numeric → string from pg
 };
 
-export async function POST(req: NextRequest) {
+// Safe JSON reader (avoid `any`)
+async function readJson<T>(req: NextRequest): Promise<T | null> {
+  try {
+    return (await req.json()) as unknown as T;
+  } catch {
+    return null;
+  }
+}
+
+export async function POST(req: NextRequest): Promise<NextResponse> {
   const pool = getPool();
-  const db = await pool.connect();
+  let db: PoolClient | null = null;
 
   try {
-    const body = await req.json().catch(() => ({} as any));
-    const businessId: string | undefined = body?.businessId?.trim();
+    db = await pool.connect();
+
+    const body = await readJson<{ businessId?: string }>(req);
+    const businessId =
+      typeof body?.businessId === "string" ? body.businessId.trim() : undefined;
 
     if (!isUUID(businessId)) {
       return NextResponse.json(
@@ -57,11 +66,10 @@ export async function POST(req: NextRequest) {
     await db.query("BEGIN");
     await db.query(`SELECT set_config('app.user_id', $1, true)`, [userId]);
 
-    // For each client in the business:
-    // - take the MOST-RECENT email_sent (sent_at)
-    // - find the EARLIEST link_clicked that is AT OR AFTER sent_at (click_at)
-    // - diff = click_at - sent_at
-    // - average over clients that have both timestamps
+    // For each client:
+    // - most recent email_sent (sent_at)
+    // - earliest link_clicked at/after sent_at (click_at)
+    // - diff = click_at - sent_at; then average over clients with both
     const { rows } = await db.query<Row>(
       `
       WITH base AS (
@@ -98,8 +106,8 @@ export async function POST(req: NextRequest) {
         COUNT(*)::numeric AS pair_count,
         AVG(diff_seconds) AS avg_seconds
       FROM pairs
-      `
-      , [businessId]
+      `,
+      [businessId]
     );
 
     await db.query("COMMIT");
@@ -115,15 +123,22 @@ export async function POST(req: NextRequest) {
         consideredClients,
         avgSeconds,
         avgMinutes: avgSeconds == null ? null : avgSeconds / 60,
-        avgHours:   avgSeconds == null ? null : avgSeconds / 3600,
+        avgHours: avgSeconds == null ? null : avgSeconds / 3600,
       },
       { status: 200, headers: { "Cache-Control": "no-store" } }
     );
-  } catch (err: any) {
-    try { await db.query("ROLLBACK"); } catch {}
-    console.error("[/api/analytics/avg-email-to-click] error:", err?.message || err);
+  } catch (err: unknown) {
+    if (db) {
+      try {
+        await db.query("ROLLBACK");
+      } catch {
+        /* ignore */
+      }
+    }
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("[/api/analytics/avg-email-to-click] error:", msg);
     return NextResponse.json({ error: "INTERNAL" }, { status: 500 });
   } finally {
-    db.release();
+    if (db) db.release();
   }
 }

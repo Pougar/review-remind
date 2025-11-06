@@ -1,26 +1,23 @@
-// app/api/get-recent-reviews/route.ts
+// app/api/business-dashboard/get-recent-reviews/route.ts
 import { NextRequest, NextResponse } from "next/server";
-import { Pool } from "pg";
+import { Pool, PoolClient } from "pg";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-/** ---------- PG Pool (singleton across hot reloads) ---------- */
-declare global {
-  // eslint-disable-next-line no-var
-  var _pgPool_recent: Pool | undefined;
-}
+/** ---------- PG Pool (singleton across hot reloads, no `var`) ---------- */
+const globalForPg = globalThis as unknown as { _pgPool_recent?: Pool };
 function getPool(): Pool {
-  if (!global._pgPool_recent) {
+  if (!globalForPg._pgPool_recent) {
     const cs = process.env.DATABASE_URL;
     if (!cs) throw new Error("DATABASE_URL is not set");
-    global._pgPool_recent = new Pool({
+    globalForPg._pgPool_recent = new Pool({
       connectionString: cs,
       ssl: { rejectUnauthorized: true },
       max: 5,
     });
   }
-  return global._pgPool_recent;
+  return globalForPg._pgPool_recent;
 }
 
 /** ---------- Types ---------- */
@@ -45,46 +42,52 @@ type RecentRow = {
 
 const isNonEmpty = (v?: string) => typeof v === "string" && v.trim().length > 0;
 
+// Safe JSON reader (no `any`)
+async function readJson<T>(req: NextRequest): Promise<T | null> {
+  try {
+    return (await req.json()) as unknown as T;
+  } catch {
+    return null;
+  }
+}
+
 export async function POST(req: NextRequest) {
   try {
-    const body = (await req.json().catch(() => ({}))) as ReqBody;
-    const userId = (body.userId || "").trim();
-    const businessIdIn = (body.businessId || "").trim();
-    const businessSlugIn = (body.businessSlug || "").trim();
-    const rawLimit = Number(body.limit);
-    const rowLimit =
-      Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 50) : 10;
+    const body = await readJson<ReqBody>(req);
+    const userId = (body?.userId ?? "").trim();
+    const businessIdIn = (body?.businessId ?? "").trim();
+    const businessSlugIn = (body?.businessSlug ?? "").trim();
+    const rawLimit = Number(body?.limit);
+    const rowLimit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 50) : 10;
 
     if (!isNonEmpty(userId)) {
       return NextResponse.json({ error: "MISSING_USER_ID" }, { status: 400 });
     }
 
     const pool = getPool();
-    const client = await pool.connect();
+    let client: PoolClient | null = null;
 
     try {
+      client = await pool.connect();
       await client.query("BEGIN");
       // Enforce RLS for this user
       await client.query(`select set_config('app.user_id', $1, true)`, [userId]);
 
-      // Resolve business id (under RLS):
-      // - trust provided businessId only if it exists under RLS
-      // - else resolve via businessSlug
-      // - else 404 (we require a concrete business context in the new app)
+      // Resolve business id (under RLS)
       let businessId: string | null = null;
 
       if (isNonEmpty(businessIdIn)) {
-        const res = await client.query(
+        const res = await client.query<{ id: string }>(
           `select id from public.businesses where id = $1 and deleted_at is null limit 1`,
           [businessIdIn]
         );
-        businessId = (res.rows[0] as { id: string } | undefined)?.id ?? null;
+        businessId = res.rows[0]?.id ?? null;
       } else if (isNonEmpty(businessSlugIn)) {
-        const res = await client.query(
+        const res = await client.query<{ id: string }>(
           `select id from public.businesses where slug = $1 and deleted_at is null limit 1`,
           [businessSlugIn]
         );
-        businessId = (res.rows[0] as { id: string } | undefined)?.id ?? null;
+        businessId = res.rows[0]?.id ?? null;
       }
 
       if (!businessId) {
@@ -95,10 +98,9 @@ export async function POST(req: NextRequest) {
         );
       }
 
-      // Pull recent internal + unlinked Google reviews for this business.
-      // Cast stars to float8 to get numbers (not strings) from node-postgres.
-      const res = await client.query(
-  `
+      // Recent internal + unlinked Google reviews
+      const res = await client.query<RecentRow>(
+        `
       with internal_reviews as (
         select
           r.id::text                                as review_id,
@@ -117,7 +119,6 @@ export async function POST(req: NextRequest) {
           and nullif(btrim(r.review), '') is not null
       ),
 
-      /* Google via VIEW (if present) */
       google_vw as (
         select
           vgr.id::text                              as review_id,
@@ -125,9 +126,9 @@ export async function POST(req: NextRequest) {
           'google'::text                            as is_primary,
           vgr.author_name::text                     as client_name,
           case
-            when vgr.stars is null               then null
-            when (vgr.stars::float8) >= 4       then true
-            when (vgr.stars::float8) <= 2       then false
+            when vgr.stars is null then null
+            when (vgr.stars::float8) >= 4 then true
+            when (vgr.stars::float8) <= 2 then false
             when (vgr.stars::float8) between 2.5 and 3.5 then null
             else null
           end                                       as sentiment,
@@ -141,17 +142,16 @@ export async function POST(req: NextRequest) {
           and nullif(btrim(vgr.review), '') is not null
       ),
 
-      /* Google via TABLE (direct read) */
       google_tbl as (
         select
-          gr.id::text                                as review_id,
-          null::text                                 as client_id,
-          'google'::text                             as is_primary,
-          gr.author_name::text                       as client_name,
+          gr.id::text                               as review_id,
+          null::text                                as client_id,
+          'google'::text                            as is_primary,
+          gr.author_name::text                      as client_name,
           case
-            when gr.stars is null                then null
-            when (gr.stars::float8) >= 4        then true
-            when (gr.stars::float8) <= 2        then false
+            when gr.stars is null then null
+            when (gr.stars::float8) >= 4 then true
+            when (gr.stars::float8) <= 2 then false
             when (gr.stars::float8) between 2.5 and 3.5 then null
             else null
           end                                        as sentiment,
@@ -165,10 +165,9 @@ export async function POST(req: NextRequest) {
           and nullif(btrim(gr.review), '') is not null
       ),
 
-      /* Deduplicate google view + table */
       google_union as (
         select * from google_vw
-        union               -- union removes exact duplicates safely
+        union
         select * from google_tbl
       )
 
@@ -181,13 +180,12 @@ export async function POST(req: NextRequest) {
       order by coalesce(u.updated_at, u.created_at) desc nulls last
       limit $2
       `,
-      [businessId, rowLimit]
-    );
-
+        [businessId, rowLimit]
+      );
 
       await client.query("COMMIT");
 
-      const rows = res.rows as unknown as RecentRow[];
+      const rows = res.rows;
 
       return NextResponse.json(
         {
@@ -209,14 +207,17 @@ export async function POST(req: NextRequest) {
       );
     } catch (err) {
       try {
-        await client.query("ROLLBACK");
-      } catch {}
+        await (client as PoolClient).query("ROLLBACK");
+      } catch {
+        /* ignore */
+      }
       throw err;
     } finally {
-      client.release();
+      if (client) client.release();
     }
-  } catch (err: any) {
-    console.error("[/api/get-recent-reviews] error:", err?.stack || err);
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.stack ?? err.message : String(err);
+    console.error("[/api/get-recent-reviews] error:", msg);
     return NextResponse.json({ error: "INTERNAL" }, { status: 500 });
   }
 }

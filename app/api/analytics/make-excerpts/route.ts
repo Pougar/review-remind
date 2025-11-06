@@ -6,45 +6,49 @@ import { google } from "@ai-sdk/google";
 import { auth } from "@/app/lib/auth";
 
 /* ============================================================
-   PG Pool (singleton across HMR)
-   ============================================================ */
-declare global {
-  // eslint-disable-next-line no-var
-  var _pgPoolMakeExcerpts: Pool | undefined;
-}
+   PG Pool (singleton across HMR) — no eslint-disable, no `var`
+============================================================ */
+const globalForPg = globalThis as unknown as { _pgPoolMakeExcerpts?: Pool };
 function getPool(): Pool {
-  if (!global._pgPoolMakeExcerpts) {
+  if (!globalForPg._pgPoolMakeExcerpts) {
     const cs = process.env.DATABASE_URL;
     if (!cs) throw new Error("DATABASE_URL is not set");
-    global._pgPoolMakeExcerpts = new Pool({
+    globalForPg._pgPoolMakeExcerpts = new Pool({
       connectionString: cs,
       ssl: { rejectUnauthorized: false },
       max: 5,
     });
   }
-  return global._pgPoolMakeExcerpts;
+  return globalForPg._pgPoolMakeExcerpts;
 }
 
 /* ============================================================
    Helpers / Types
-   ============================================================ */
+============================================================ */
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 type ReqBody = { businessId?: string };
 
-const isUUID = (v?: string | null) =>
-  !!v && /^[0-9a-fA-F-]{36}$/.test(v || "");
+const isUUID = (v?: string | null) => !!v && /^[0-9a-fA-F-]{36}$/.test(v || "");
 
 function truncate(s: string, max = 600): string {
   if (!s) return "";
   return s.length <= max ? s : s.slice(0, max);
 }
 
+async function readJson<T>(req: NextRequest): Promise<T | null> {
+  try {
+    return (await req.json()) as unknown as T;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * InputItem = review text we feed to Gemini
- * - source "reviews": came from our internal reviews table
- * - source "google_reviews": came from google_reviews table and is not linked to an internal review
+ * - source "reviews": internal reviews table
+ * - source "google_reviews": unlinked google_reviews rows
  */
 type InputItem = {
   id: string;
@@ -72,7 +76,7 @@ type GeminiOutput = {
 
 /* ============================================================
    Route
-   ============================================================ */
+============================================================ */
 
 export async function POST(req: NextRequest) {
   const pool = getPool();
@@ -80,7 +84,8 @@ export async function POST(req: NextRequest) {
 
   try {
     // ----- 0. Parse input and auth
-    const { businessId } = (await req.json().catch(() => ({}))) as ReqBody;
+    const body = await readJson<ReqBody>(req);
+    const businessId = (body?.businessId ?? "").trim();
     if (!isUUID(businessId)) {
       return NextResponse.json(
         { error: "MISSING_OR_INVALID_BUSINESS_ID" },
@@ -105,20 +110,15 @@ export async function POST(req: NextRequest) {
     await db.query(`SELECT set_config('app.user_id', $1, true)`, [userId]);
 
     // ----- 1. Load phrases for this business
-    // Only consider active phrases (not soft-deleted)
-    // We use these phrases to ask Gemini for excerpts.
-    const phrasesQ = await db.query<{
-      id: string;
-      phrase: string;
-    }>(
+    const phrasesQ = await db.query<{ id: string; phrase: string }>(
       `
       SELECT p.id, p.phrase
       FROM public.phrases p
       WHERE p.business_id = $1::uuid
       ORDER BY
         p.updated_at DESC NULLS LAST,
-        p.counts DESC NULLS LAST,
-        p.id DESC
+        p.counts   DESC NULLS LAST,
+        p.id       DESC
       LIMIT 20
       `,
       [businessId]
@@ -137,35 +137,13 @@ export async function POST(req: NextRequest) {
     }
 
     // Map lower(phrase) -> { id, phrase }
-    const phraseMap = new Map<
-      string,
-      { id: string; phrase: string }
-    >();
+    const phraseMap = new Map<string, { id: string; phrase: string }>();
     const phraseList = phrasesQ.rows.map((p) => {
-      phraseMap.set(p.phrase.toLowerCase(), {
-        id: p.id,
-        phrase: p.phrase,
-      });
+      phraseMap.set(p.phrase.toLowerCase(), { id: p.id, phrase: p.phrase });
       return p.phrase;
     });
 
     // ----- 2. Collect review text for this business
-
-    /**
-     * Internal reviews:
-     *  - Take rows from public.reviews
-     *  - Must not be soft-deleted
-     *  - Use r.review as the text (single canonical field in your schema)
-     *
-     * Google reviews:
-     *  - Take rows from public.google_reviews
-     *  - Must not be soft-deleted
-     *  - EXCLUDE any google_reviews row that is already "claimed"
-     *    by a public.reviews row via reviews.g_review_id = google_reviews.id
-     *    (and that internal review isn't soft-deleted).
-     *
-     * That "claimed" logic means: internal reviews always take precedence.
-     */
 
     // Internal reviews
     const internalQ = await db.query<{
@@ -190,7 +168,6 @@ export async function POST(req: NextRequest) {
     );
 
     // Unclaimed Google reviews
-    // (we assume google_reviews has: id, business_id, review, stars, updated_at, created_at, deleted_at)
     const googleQ = await db.query<{
       id: string;
       stars: number | null;
@@ -225,9 +202,7 @@ export async function POST(req: NextRequest) {
         is_unlinked_google: false,
         stars: r.stars,
         text: truncate(r.review ?? ""),
-        ts: new Date(
-          r.updated_at ?? r.created_at ?? "1970-01-01"
-        ).getTime(),
+        ts: new Date(r.updated_at ?? r.created_at ?? "1970-01-01").getTime(),
       })),
       ...googleQ.rows.map((g) => ({
         id: g.id,
@@ -235,16 +210,21 @@ export async function POST(req: NextRequest) {
         is_unlinked_google: true,
         stars: g.stars,
         text: truncate(g.review ?? ""),
-        ts: new Date(
-          g.updated_at ?? g.created_at ?? "1970-01-01"
-        ).getTime(),
+        ts: new Date(g.updated_at ?? g.created_at ?? "1970-01-01").getTime(),
       })),
     ].filter((row) => row.text.length > 0);
 
+    // sort by ts, keep top 100, then pick only needed fields (avoid unused `ts`)
     const inputs: InputItem[] = inputsWithTs
       .sort((a, b) => b.ts - a.ts)
       .slice(0, 100)
-      .map(({ ts, ...rest }) => rest);
+      .map((o) => ({
+        id: o.id,
+        source: o.source,
+        is_unlinked_google: o.is_unlinked_google,
+        stars: o.stars,
+        text: o.text,
+      }));
 
     if (!inputs.length) {
       await db.query("ROLLBACK");
@@ -260,23 +240,15 @@ export async function POST(req: NextRequest) {
     }
 
     // Track which review IDs are valid and what type they are.
-    // We'll use this to validate Gemini output.
-    const allowedReviewIds = new Set(
-      inputs
-        .filter((i) => i.source === "reviews")
-        .map((i) => i.id)
-    );
+    const allowedReviewIds = new Set(inputs.filter((i) => i.source === "reviews").map((i) => i.id));
     const allowedGoogleIds = new Set(
-      inputs
-        .filter((i) => i.source === "google_reviews")
-        .map((i) => i.id)
+      inputs.filter((i) => i.source === "google_reviews").map((i) => i.id)
     );
 
     // ----- 3. Build Gemini prompt
-
     const modelInput = {
       business_id: businessId,
-      phrases: phraseList, // phrases we already have in DB
+      phrases: phraseList,
       reviews: inputs.map((i) => ({
         id: i.id,
         source: i.source,
@@ -294,8 +266,6 @@ Rules:
 - Each excerpt object MUST include:
   - "excerpt": short snippet of review text (no PII, keep it ~1 sentence).
   - "sentiment": "good" | "bad".
-    - "good" means positive feedback, praise, something we'd proudly show.
-    - "bad" means a complaint, pain point, or clearly negative experience.
   - "review_id": MUST match an "id" from the provided reviews list.
   - "is_unlinked_google": true iff that review came from source "google_reviews".
 - If sentiment is ambiguous, skip that excerpt.
@@ -342,45 +312,26 @@ ${instructions}
     const jsonStr = (() => {
       const start = raw.indexOf("{");
       const end = raw.lastIndexOf("}");
-      return start !== -1 && end !== -1
-        ? raw.slice(start, end + 1)
-        : raw;
+      return start !== -1 && end !== -1 ? raw.slice(start, end + 1) : raw;
     })();
 
     let parsed: GeminiOutput;
     try {
-      parsed = JSON.parse(jsonStr);
+      parsed = JSON.parse(jsonStr) as unknown as GeminiOutput;
     } catch {
       await db.query("ROLLBACK");
       return NextResponse.json(
-        {
-          error: "MODEL_PARSE_ERROR",
-          raw: raw.slice(0, 2000),
-        },
+        { error: "MODEL_PARSE_ERROR", raw: raw.slice(0, 2000) },
         { status: 502 }
       );
     }
 
     if (!parsed || !Array.isArray(parsed.phrases)) {
       await db.query("ROLLBACK");
-      return NextResponse.json(
-        { error: "BAD_MODEL_SHAPE" },
-        { status: 502 }
-      );
+      return NextResponse.json({ error: "BAD_MODEL_SHAPE" }, { status: 502 });
     }
 
     // ----- 6. Sanitize Gemini output
-    //
-    // We'll:
-    // - ignore any phrase we didn't give it
-    // - limit to 6 excerpts per phrase
-    // - validate review_id against allowed sets
-    // - clip excerpt length to ~350 chars so we don't bloat DB
-    //
-    // After this step we have cleanGroups = [
-    //   { phrase_id, phrase, excerpts: [{ excerpt, sentiment, review_id, is_unlinked_google }, ...] }
-    // ]
-    //
     const cleanGroups: {
       phrase_id: string;
       phrase: string;
@@ -391,21 +342,18 @@ ${instructions}
         is_unlinked_google: boolean;
       }[];
     }[] = [];
+    for (const p of phrasesQ.rows) {
+      phraseMap.set(p.phrase.toLowerCase(), { id: p.id, phrase: p.phrase });
+    }
 
     for (const group of parsed.phrases) {
-      const phraseRaw = String(group?.phrase ?? "")
-        .trim()
-        .slice(0, 120);
+      const phraseRaw = String(group?.phrase ?? "").trim().slice(0, 120);
       if (!phraseRaw) continue;
 
-      // match to an existing phrase for this business
       const match = phraseMap.get(phraseRaw.toLowerCase());
       if (!match) continue;
 
-      // normalize excerpts
-      const normalized =
-        Array.isArray(group.excerpts) ? group.excerpts : [];
-
+      const normalized = Array.isArray(group.excerpts) ? group.excerpts : [];
       const cleanedForPhrase: {
         excerpt: string;
         sentiment: "good" | "bad";
@@ -418,20 +366,10 @@ ${instructions}
         if (!rid) continue;
 
         const fromGoogle = !!ex?.is_unlinked_google;
+        if (fromGoogle ? !allowedGoogleIds.has(rid) : !allowedReviewIds.has(rid)) continue;
 
-        // Validate review_id against what we loaded
-        if (fromGoogle) {
-          if (!allowedGoogleIds.has(rid)) continue;
-        } else {
-          if (!allowedReviewIds.has(rid)) continue;
-        }
-
-        const sentiment: "good" | "bad" =
-          ex?.sentiment === "bad" ? "bad" : "good";
-
-        const excerptText = String(ex?.excerpt ?? "")
-          .trim()
-          .slice(0, 350);
+        const sentiment: "good" | "bad" = ex?.sentiment === "bad" ? "bad" : "good";
+        const excerptText = String(ex?.excerpt ?? "").trim().slice(0, 350);
         if (!excerptText) continue;
 
         cleanedForPhrase.push({
@@ -454,56 +392,18 @@ ${instructions}
     if (!cleanGroups.length) {
       await db.query("ROLLBACK");
       return NextResponse.json(
-        {
-          success: true,
-          message: "Model returned no usable excerpts.",
-          phrases: [],
-        },
+        { success: true, message: "Model returned no usable excerpts.", phrases: [] },
         { status: 200 }
       );
     }
 
     // ----- 7. Persist excerpts
-    //
-    // For each phrase:
-    //   - wipe existing excerpts for that phrase (hard delete is fine here)
-    //   - insert fresh excerpts
-    //
-    // Then recompute good_count / bad_count for those phrases in `public.phrases`.
-    //
-    // NOTE: Your schema for `public.excerpts`:
-    //   id uuid PK DEFAULT gen_random_uuid(),
-    //   business_id uuid NOT NULL,
-    //   phrase_id uuid,
-    //   happy boolean,
-    //   excerpt text,
-    //   review_id uuid,
-    //   g_review_id uuid,
-    //   linked boolean NOT NULL DEFAULT false,
-    //   created_by text REFERENCES public.myusers(betterauth_id),
-    //   created_at timestamptz DEFAULT now(),
-    //   updated_at timestamptz DEFAULT now(),
-    //   deleted_at timestamptz
-    //
-    // We'll:
-    //   happy = sentiment === "good"
-    //   if is_unlinked_google === true -> goes in g_review_id, NOT review_id
-    //   else -> goes in review_id, NOT g_review_id
-    //   linked stays false
-    //   created_by = userId
-
     let phrasesTouched = 0;
     let insertedExcerpts = 0;
 
     for (const group of cleanGroups) {
-      // delete old excerpts for this phrase (hard delete);
-      // if you prefer soft-delete, change this to an UPDATE setting deleted_at.
-      await db.query(
-        `DELETE FROM public.excerpts WHERE phrase_id = $1`,
-        [group.phrase_id]
-      );
+      await db.query(`DELETE FROM public.excerpts WHERE phrase_id = $1`, [group.phrase_id]);
 
-      // insert new excerpts
       for (const ex of group.excerpts) {
         const happy = ex.sentiment === "good";
         const reviewId = ex.is_unlinked_google ? null : ex.review_id;
@@ -536,15 +436,7 @@ ${instructions}
             NOW()
           )
           `,
-          [
-            businessId,
-            group.phrase_id,
-            happy,
-            ex.excerpt,
-            reviewId,
-            gReviewId,
-            userId,
-          ]
+          [businessId, group.phrase_id, happy, ex.excerpt, reviewId, gReviewId, userId]
         );
 
         insertedExcerpts++;
@@ -553,9 +445,8 @@ ${instructions}
       phrasesTouched++;
     }
 
-    // recompute good_count / bad_count in phrases for just the affected phrases
+    // recompute good_count / bad_count
     const affectedPhraseIds = cleanGroups.map((g) => g.phrase_id);
-
     await db.query(
       `
       WITH sums AS (
@@ -591,23 +482,18 @@ ${instructions}
       },
       { status: 200 }
     );
-  } catch (err: any) {
-    // attempt rollback if tx started
+  } catch (err: unknown) {
     try {
-      if (db) {
-        await db.query("ROLLBACK");
-      }
+      if (db) await db.query("ROLLBACK");
     } catch {
       /* ignore rollback error */
     }
 
-    console.error(
-      "[/api/analytics/make-excerpts] error:",
-      err?.stack || err
-    );
+    const msg = err instanceof Error ? err.stack ?? err.message : String(err);
+    console.error("[/api/analytics/make-excerpts] error:", msg);
 
-    const msg = String(err?.message || "").toLowerCase();
-    if (msg.includes("row-level security")) {
+    const lower = (err instanceof Error ? err.message : String(err)).toLowerCase();
+    if (lower.includes("row-level security")) {
       return NextResponse.json(
         {
           error:
@@ -617,13 +503,8 @@ ${instructions}
       );
     }
 
-    return NextResponse.json(
-      { error: "SERVER_ERROR" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: "SERVER_ERROR" }, { status: 500 });
   } finally {
-    if (db) {
-      db.release();
-    }
+    if (db) db.release();
   }
 }

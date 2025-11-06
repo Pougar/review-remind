@@ -4,29 +4,26 @@ import { Pool, PoolClient } from "pg";
 import { auth } from "@/app/lib/auth";
 
 /* ============================================================
-   PG Pool (singleton across HMR)
-   ============================================================ */
-declare global {
-  // eslint-disable-next-line no-var
-  var _pgPoolGetReview: Pool | undefined;
-}
+   PG Pool (singleton across HMR) — no eslint-disable, no `var`
+============================================================ */
+const globalForPg = globalThis as unknown as { _pgPoolGetReview?: Pool };
 
 function getPool(): Pool {
-  if (!global._pgPoolGetReview) {
+  if (!globalForPg._pgPoolGetReview) {
     const cs = process.env.DATABASE_URL;
     if (!cs) throw new Error("DATABASE_URL is not set");
-    global._pgPoolGetReview = new Pool({
+    globalForPg._pgPoolGetReview = new Pool({
       connectionString: cs,
       ssl: { rejectUnauthorized: false },
       max: 5,
     });
   }
-  return global._pgPoolGetReview;
+  return globalForPg._pgPoolGetReview;
 }
 
 /* ============================================================
    Helpers
-   ============================================================ */
+============================================================ */
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
@@ -36,42 +33,42 @@ type ReqBody = {
   excerptId?: string; // allow either
 };
 
-const isUUID = (v?: string | null) =>
-  !!v && /^[0-9a-fA-F-]{36}$/.test(v || "");
+const isUUID = (v?: string | null) => !!v && /^[0-9a-fA-F-]{36}$/.test(v || "");
+
+async function readJson<T>(req: NextRequest): Promise<T | null> {
+  try {
+    return (await req.json()) as unknown as T;
+  } catch {
+    return null;
+  }
+}
 
 /* ============================================================
    Route
-   ============================================================ */
+============================================================ */
 export async function POST(req: NextRequest) {
   const pool = getPool();
-  const db: PoolClient = await pool.connect();
+  let db: PoolClient | null = null;
 
   try {
+    db = await pool.connect();
+
     // ----- 1. Parse input
-    const body = (await req.json().catch(() => ({}))) as ReqBody;
-    const businessId = (body.businessId || "").trim();
-    const excerptId = ((body.excerpt_id ?? body.excerptId) || "").trim();
+    const body = await readJson<ReqBody>(req);
+    const businessId = (body?.businessId ?? "").trim();
+    const excerptId = ((body?.excerpt_id ?? body?.excerptId) ?? "").trim();
 
     if (!isUUID(businessId)) {
-      db.release();
-      return NextResponse.json(
-        { error: "MISSING_OR_INVALID_BUSINESS_ID" },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "MISSING_OR_INVALID_BUSINESS_ID" }, { status: 400 });
     }
     if (!isUUID(excerptId)) {
-      db.release();
-      return NextResponse.json(
-        { error: "MISSING_OR_INVALID_EXCERPT_ID" },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "MISSING_OR_INVALID_EXCERPT_ID" }, { status: 400 });
     }
 
     // ----- 2. Auth / RLS
     const session = await auth.api.getSession({ headers: req.headers });
     const userId = session?.user?.id;
     if (!userId) {
-      db.release();
       return NextResponse.json(
         { error: "UNAUTHORIZED", message: "Sign in required." },
         { status: 401 }
@@ -102,33 +99,13 @@ export async function POST(req: NextRequest) {
 
     if (exQ.rowCount === 0) {
       await db.query("ROLLBACK");
-      db.release();
-      return NextResponse.json(
-        { error: "EXCERPT_NOT_FOUND" },
-        { status: 404 }
-      );
+      return NextResponse.json({ error: "EXCERPT_NOT_FOUND" }, { status: 404 });
     }
 
     const ex = exQ.rows[0];
 
     // ----- 4a. If excerpt refers to an internal review (public.reviews)
     if (ex.review_id) {
-      // pull the canonical internal review row.
-      // Schema:
-      //   reviews (
-      //     id uuid,
-      //     business_id uuid,
-      //     client_id uuid,
-      //     review text,
-      //     stars numeric(2,1),
-      //     happy boolean,
-      //     g_review_id uuid,
-      //     created_at timestamptz,
-      //     updated_at timestamptz,
-      //     deleted_at timestamptz
-      //   )
-      //
-      // Also try to get display_name of the client (if exists).
       const rQ = await db.query<{
         id: string;
         review: string | null;
@@ -146,8 +123,7 @@ export async function POST(req: NextRequest) {
           r.created_at,
           c.display_name AS reviewer_name
         FROM public.reviews r
-        LEFT JOIN public.clients c
-          ON c.id = r.client_id
+        LEFT JOIN public.clients c ON c.id = r.client_id
         WHERE r.id = $1::uuid
           AND r.business_id = $2::uuid
         LIMIT 1
@@ -157,19 +133,13 @@ export async function POST(req: NextRequest) {
 
       if (rQ.rowCount === 0) {
         await db.query("ROLLBACK");
-        db.release();
-        return NextResponse.json(
-          { error: "REVIEW_NOT_FOUND" },
-          { status: 404 }
-        );
+        return NextResponse.json({ error: "REVIEW_NOT_FOUND" }, { status: 404 });
       }
 
       const r = rQ.rows[0];
-
       const text = r.review ? r.review.trim() : null;
 
       await db.query("COMMIT");
-      db.release();
       return NextResponse.json(
         {
           success: true,
@@ -188,23 +158,13 @@ export async function POST(req: NextRequest) {
 
     // ----- 4b. Otherwise, excerpt refers to a Google review
     if (!ex.g_review_id) {
-      // Excerpt row has neither review_id nor g_review_id
       await db.query("ROLLBACK");
-      db.release();
       return NextResponse.json(
         { error: "MISSING_REVIEW_REFERENCE" },
         { status: 422 }
       );
     }
 
-    // We assume google_reviews schema something like:
-    //   id uuid,
-    //   business_id uuid,
-    //   review text,
-    //   stars numeric,
-    //   name text,
-    //   created_at timestamptz,
-    //   deleted_at timestamptz
     const gQ = await db.query<{
       id: string;
       review: string | null;
@@ -229,17 +189,12 @@ export async function POST(req: NextRequest) {
 
     if (gQ.rowCount === 0) {
       await db.query("ROLLBACK");
-      db.release();
-      return NextResponse.json(
-        { error: "GOOGLE_REVIEW_NOT_FOUND" },
-        { status: 404 }
-      );
+      return NextResponse.json({ error: "GOOGLE_REVIEW_NOT_FOUND" }, { status: 404 });
     }
 
     const g = gQ.rows[0];
 
     await db.query("COMMIT");
-    db.release();
     return NextResponse.json(
       {
         success: true,
@@ -254,21 +209,19 @@ export async function POST(req: NextRequest) {
       },
       { status: 200 }
     );
-  } catch (err: any) {
-    try {
-      await db.query("ROLLBACK");
-    } catch {
-      /* ignore rollback error */
+  } catch (err: unknown) {
+    if (db) {
+      try {
+        await db.query("ROLLBACK");
+      } catch {
+        /* ignore rollback error */
+      }
     }
-    db.release();
+    const msg = err instanceof Error ? err.stack ?? err.message : String(err);
+    console.error("[/api/analytics/get-review] error:", msg);
 
-    console.error(
-      "[/api/analytics/get-review] error:",
-      err?.stack || err
-    );
-
-    const msg = String(err?.message || "").toLowerCase();
-    if (msg.includes("row-level security")) {
+    const lower = (err instanceof Error ? err.message : String(err)).toLowerCase();
+    if (lower.includes("row-level security")) {
       return NextResponse.json(
         {
           error:
@@ -278,9 +231,8 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    return NextResponse.json(
-      { error: "SERVER_ERROR" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: "SERVER_ERROR" }, { status: 500 });
+  } finally {
+    if (db) db.release();
   }
 }

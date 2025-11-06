@@ -1,25 +1,22 @@
 // app/api/analytics/get-graph-info/route.ts
 import { NextRequest, NextResponse } from "next/server";
-import { Pool } from "pg";
+import { Pool, PoolClient } from "pg";
 import { auth } from "@/app/lib/auth";
 
-/** ---------- PG Pool (singleton across hot reloads) ---------- */
-declare global {
-  // eslint-disable-next-line no-var
-  var _pgPoolGraphInfo: Pool | undefined;
-}
+/** ---------- PG Pool (singleton across hot reloads, no `var`) ---------- */
+const globalForPg = globalThis as unknown as { _pgPoolGraphInfo?: Pool };
 
 function getPool(): Pool {
-  if (!global._pgPoolGraphInfo) {
+  if (!globalForPg._pgPoolGraphInfo) {
     const cs = process.env.DATABASE_URL;
     if (!cs) throw new Error("DATABASE_URL is not set");
-    global._pgPoolGraphInfo = new Pool({
+    globalForPg._pgPoolGraphInfo = new Pool({
       connectionString: cs,
       ssl: { rejectUnauthorized: true },
       max: 5,
     });
   }
-  return global._pgPoolGraphInfo;
+  return globalForPg._pgPoolGraphInfo;
 }
 
 export const runtime = "nodejs";
@@ -31,14 +28,32 @@ type ReqBody = {
   businessSlug?: string;
 };
 
+type IdRow = { id: string };
+
+type GraphRow = {
+  date: string;                 // to_char(..., 'YYYY-MM-DD')
+  good_count: number | string;  // COUNT(*) returns string in pg by default
+  bad_count: number | string;
+};
+
 const isNonEmpty = (v?: string) => typeof v === "string" && v.trim().length > 0;
+
+// Safe JSON reader (avoid `any`)
+async function readJson<T>(req: NextRequest): Promise<T | null> {
+  try {
+    return (await req.json()) as unknown as T;
+  } catch {
+    return null;
+  }
+}
 
 export async function POST(req: NextRequest) {
   try {
-    const body = (await req.json().catch(() => ({}))) as ReqBody;
+    const body = await readJson<ReqBody>(req);
+    const providedUserId = (body?.userId ?? "").trim();
 
     // RLS user id: prefer provided, fall back to server session
-    let userId = (body.userId ?? "").trim();
+    let userId = providedUserId;
     if (!isNonEmpty(userId)) {
       try {
         const sess = await auth.api.getSession({ headers: req.headers });
@@ -51,13 +66,14 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: "MISSING_USER_ID" }, { status: 401 });
     }
 
-    const businessIdIn = (body.businessId ?? "").trim();
-    const businessSlugIn = (body.businessSlug ?? "").trim();
+    const businessIdIn = (body?.businessId ?? "").trim();
+    const businessSlugIn = (body?.businessSlug ?? "").trim();
 
     const pool = getPool();
-    const client = await pool.connect();
+    let client: PoolClient | null = null;
 
     try {
+      client = await pool.connect();
       await client.query("BEGIN");
       // Ensure RLS applies for this user
       await client.query(`select set_config('app.user_id', $1, true)`, [userId]);
@@ -66,13 +82,13 @@ export async function POST(req: NextRequest) {
       let businessId: string | null = null;
 
       if (isNonEmpty(businessIdIn)) {
-        const q = await client.query(
+        const q = await client.query<IdRow>(
           `select id from public.businesses where id = $1 and deleted_at is null limit 1`,
           [businessIdIn]
         );
         businessId = q.rows[0]?.id ?? null;
       } else if (isNonEmpty(businessSlugIn)) {
-        const q = await client.query(
+        const q = await client.query<IdRow>(
           `select id from public.businesses where slug = $1 and deleted_at is null limit 1`,
           [businessSlugIn]
         );
@@ -87,8 +103,7 @@ export async function POST(req: NextRequest) {
         );
       }
 
-      // ✅ Added `gr` CTE to also read from public.google_reviews (linked = false)
-      // Thresholds for google_reviews ONLY: good if stars > 3, bad if stars < 2.5
+      // ✅ Include reviews (internal), v_google_reviews_with_business (unlinked), and google_reviews (unlinked) with thresholds
       const sql = `
         with r as (
           select
@@ -136,15 +151,15 @@ export async function POST(req: NextRequest) {
         order by 1;
       `;
 
-      const res = await client.query(sql, [businessId]);
+      const res = await client.query<GraphRow>(sql, [businessId]);
 
       await client.query("COMMIT");
 
-      const points = res.rows.map((r) => {
-        const date = (r as any).date as string;
-        const good = Number((r as any).good_count ?? 0);
-        const bad = Number((r as any).bad_count ?? 0);
-        return [date, good, bad] as [string, number, number];
+      const points: [string, number, number][] = res.rows.map((r) => {
+        const date = r.date;
+        const good = Number(r.good_count) || 0;
+        const bad = Number(r.bad_count) || 0;
+        return [date, good, bad];
       });
 
       return NextResponse.json(
@@ -152,13 +167,18 @@ export async function POST(req: NextRequest) {
         { status: 200, headers: { "Cache-Control": "no-store" } }
       );
     } catch (err) {
-      try { await client.query("ROLLBACK"); } catch {}
+      try {
+        if (client) await client.query("ROLLBACK");
+      } catch {
+        /* ignore */
+      }
       throw err;
     } finally {
-      client.release();
+      if (client) client.release();
     }
-  } catch (err: any) {
-    console.error("[/api/analytics/get-graph-info] error:", err?.stack || err);
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.stack ?? err.message : String(err);
+    console.error("[/api/analytics/get-graph-info] error:", msg);
     return NextResponse.json({ success: false, error: "SERVER_ERROR" }, { status: 500 });
   }
 }

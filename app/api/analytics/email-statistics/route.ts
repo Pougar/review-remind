@@ -1,24 +1,25 @@
 // app/api/analytics/email-analytics/route.ts
 import { NextRequest, NextResponse } from "next/server";
-import { Pool } from "pg";
+import { Pool, PoolClient } from "pg";
 import { auth } from "@/app/lib/auth";
 
 /** ---------- PG Pool (singleton across HMR) ---------- */
-declare global {
-  // eslint-disable-next-line no-var
-  var _pgPoolEmailAnalytics: Pool | undefined;
-}
+// Avoid `var` and eslint-disable by using a globalThis slot.
+const globalForPg = globalThis as unknown as {
+  _pgPoolEmailAnalytics?: Pool;
+};
+
 function getPool(): Pool {
-  if (!global._pgPoolEmailAnalytics) {
+  if (!globalForPg._pgPoolEmailAnalytics) {
     const cs = process.env.DATABASE_URL;
     if (!cs) throw new Error("DATABASE_URL is not set");
-    global._pgPoolEmailAnalytics = new Pool({
+    globalForPg._pgPoolEmailAnalytics = new Pool({
       connectionString: cs,
       ssl: { rejectUnauthorized: true }, // set to false only if your Neon certs aren't configured
       max: 5,
     });
   }
-  return global._pgPoolEmailAnalytics;
+  return globalForPg._pgPoolEmailAnalytics;
 }
 
 export const runtime = "nodejs";
@@ -33,13 +34,24 @@ type CountsRow = {
   review_submitted: string | number;
 };
 
+// Safe JSON reader (no `any`)
+async function readJson<T>(req: NextRequest): Promise<T | null> {
+  try {
+    return (await req.json()) as unknown as T;
+  } catch {
+    return null;
+  }
+}
+
 export async function POST(req: NextRequest) {
   const pool = getPool();
-  const db = await pool.connect();
+  let db: PoolClient | null = null;
 
   try {
-    const body = await req.json().catch(() => ({} as any));
-    const businessId: string | undefined = body?.businessId?.trim();
+    db = await pool.connect();
+
+    const body = await readJson<{ businessId?: string }>(req);
+    const businessId = typeof body?.businessId === "string" ? body.businessId.trim() : undefined;
 
     if (!isUUID(businessId)) {
       return NextResponse.json(
@@ -59,7 +71,7 @@ export async function POST(req: NextRequest) {
     await db.query(`SELECT set_config('app.user_id', $1, true)`, [userId]);
 
     // Count unique clients by action type (email_sent, link_clicked, review_submitted)
-    // within the given business. Uses a base set of clients, then aggregates actions.
+    // within the given business.
     const { rows } = await db.query<CountsRow>(
       `
       WITH base AS (
@@ -111,11 +123,18 @@ export async function POST(req: NextRequest) {
       },
       { status: 200, headers: { "Cache-Control": "no-store" } }
     );
-  } catch (err: any) {
-    try { await db.query("ROLLBACK"); } catch {}
-    console.error("[/api/analytics/email-analytics] error:", err?.message || err);
+  } catch (err: unknown) {
+    if (db) {
+      try {
+        await db.query("ROLLBACK");
+      } catch {
+        // ignore
+      }
+    }
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("[/api/analytics/email-analytics] error:", msg);
     return NextResponse.json({ error: "INTERNAL" }, { status: 500 });
   } finally {
-    db.release();
+    if (db) db.release();
   }
 }

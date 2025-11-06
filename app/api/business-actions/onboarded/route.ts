@@ -7,23 +7,31 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /* ---------- DB pool (reused across HMR) ---------- */
+const globalForPg = globalThis as unknown as { __pgPool?: Pool };
 const pool =
-  (globalThis as any).__pgPool ??
+  globalForPg.__pgPool ??
   new Pool({
     connectionString: process.env.DATABASE_URL,
     ssl: { rejectUnauthorized: true },
   });
-(globalThis as any).__pgPool = pool;
+globalForPg.__pgPool = pool;
 
 /* ---------- helpers ---------- */
 const isUUID = (v?: string) => !!v && /^[0-9a-fA-F-]{36}$/.test(v);
 
-export async function POST(req: NextRequest) {
-  const client: PoolClient = await pool.connect(); // Always defined for try/catch
+async function readJson<T>(req: NextRequest): Promise<T | null> {
   try {
-    const { businessId } = (await req.json().catch(() => ({}))) as {
-      businessId?: string;
-    };
+    return (await req.json()) as unknown as T;
+  } catch {
+    return null;
+  }
+}
+
+export async function POST(req: NextRequest) {
+  const client: PoolClient = await pool.connect();
+  try {
+    const body = await readJson<{ businessId?: string }>(req);
+    const businessId = body?.businessId;
 
     if (!isUUID(businessId)) {
       return NextResponse.json(
@@ -57,9 +65,14 @@ export async function POST(req: NextRequest) {
 
     await client.query("COMMIT");
     return NextResponse.json({ success: true, inserted: result.rowCount === 1 });
-  } catch (err) {
-    try { await client.query("ROLLBACK"); } catch {}
-    console.error("[/api/business-actions/onboarded] error:", err);
+  } catch (err: unknown) {
+    try {
+      await client.query("ROLLBACK");
+    } catch {
+      /* ignore */
+    }
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("[/api/business-actions/onboarded] error:", msg);
     return NextResponse.json(
       { error: "INTERNAL", message: "Could not record business action." },
       { status: 500 }

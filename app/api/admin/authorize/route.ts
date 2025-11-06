@@ -14,7 +14,6 @@ const ADMIN_ALLOWLIST = (process.env.ADMIN_ALLOWLIST ?? "")
   .map((s) => s.trim())
   .filter(Boolean);
 
-// Trim the secret so stray whitespace/newlines don’t break comparison
 const RAW_SECRET = process.env.ADMIN_SHARED_SECRET ?? "";
 const ADMIN_SHARED_SECRET = RAW_SECRET.trim();
 
@@ -23,17 +22,15 @@ const ADMIN_COOKIE_MAX_AGE = 60 * 60 * 8; // 8 hours
 const SECURE_COOKIE = process.env.NODE_ENV === "production";
 
 /** ---------- Helpers ---------- */
-function json(data: any, init?: number | ResponseInit) {
-  const status = typeof init === "number" ? init : (init as ResponseInit)?.status ?? 200;
-  const headers: Record<string, string> = { "content-type": "application/json" };
-  return new NextResponse(JSON.stringify(data), {
-    ...(typeof init === "number" ? {} : init),
-    status,
-    headers,
-  });
+function json<T>(data: T, init?: number | ResponseInit): NextResponse {
+  const resInit: ResponseInit =
+    typeof init === "number" ? { status: init } : (init ?? {});
+  const headers = new Headers(resInit.headers);
+  headers.set("content-type", "application/json");
+  return new NextResponse(JSON.stringify(data), { ...resInit, headers });
 }
 
-function unlockedFromCookie(req: NextRequest) {
+function unlockedFromCookie(req: NextRequest): boolean {
   return req.cookies.get(ADMIN_COOKIE)?.value === "1";
 }
 
@@ -45,27 +42,42 @@ function safeEquals(a: string, b: string): boolean {
   return crypto.timingSafeEqual(aBuf, bBuf);
 }
 
-function devHeaders(extras: Record<string, string | number | boolean>) {
+function devHeaders(
+  extras: Record<string, string | number | boolean>
+): ResponseInit {
   if (process.env.NODE_ENV === "production") return {};
   // Don’t emit actual secrets; only lengths/flags
   const hdr = new Headers();
-  Object.entries(extras).forEach(([k, v]) => {
+  for (const [k, v] of Object.entries(extras)) {
     hdr.set(`X-Admin-${k}`, String(v));
-  });
+  }
   return { headers: hdr };
 }
 
-/** ---------- POST: unlock ---------- */
-export async function POST(req: NextRequest) {
-  if (!ADMIN_LOCK_ENABLED) {
-    return json({ ok: true, lock: "disabled" });
+async function readJson<T>(req: NextRequest): Promise<T | null> {
+  try {
+    return (await req.json()) as unknown as T;
+  } catch {
+    return null;
   }
+}
+
+/** ---------- POST: unlock ---------- */
+export async function POST(req: NextRequest): Promise<NextResponse> {
+  if (!ADMIN_LOCK_ENABLED) {
+    return json({ ok: true, lock: "disabled" as const });
+  }
+
   console.log(
-  "[admin] lock:", process.env.ADMIN_LOCK_ENABLED,
-  "secretLen:", (process.env.ADMIN_SHARED_SECRET || "").length,
-  "nodeEnv:", process.env.NODE_ENV
-);
-  const body = await req.json().catch(() => ({} as any));
+    "[admin] lock:",
+    process.env.ADMIN_LOCK_ENABLED,
+    "secretLen:",
+    (process.env.ADMIN_SHARED_SECRET || "").length,
+    "nodeEnv:",
+    process.env.NODE_ENV
+  );
+
+  const body = await readJson<{ code?: string }>(req);
   const submitted = typeof body?.code === "string" ? body.code.trim() : "";
 
   // Signed-in user allowlist
@@ -81,23 +93,27 @@ export async function POST(req: NextRequest) {
       : false;
 
   if (!isAllowlisted && !codeMatches) {
-    const res = json(
+    return json(
       { error: "FORBIDDEN", message: "Not allowed." },
-      { status: 403, ...devHeaders({
-        LockEnabled: true,
-        HasSecretConfigured: hasSecretConfigured,
-        SubmittedLen: submitted.length,
-        SecretLen: ADMIN_SHARED_SECRET.length,
-        Allowlisted: isAllowlisted,
-      }) }
+      {
+        status: 403,
+        ...devHeaders({
+          LockEnabled: true,
+          HasSecretConfigured: hasSecretConfigured,
+          SubmittedLen: submitted.length,
+          SecretLen: ADMIN_SHARED_SECRET.length,
+          Allowlisted: isAllowlisted,
+        }),
+      }
     );
-    return res;
   }
 
   const res = json(
     {
       ok: true,
-      unlockedBy: isAllowlisted ? "allowlist" : "code",
+      unlockedBy: (isAllowlisted ? "allowlist" : "code") as
+        | "allowlist"
+        | "code",
       userId: uid ?? null,
     },
     devHeaders({
@@ -118,10 +134,10 @@ export async function POST(req: NextRequest) {
 }
 
 /** ---------- GET: status ---------- */
-export async function GET(req: NextRequest) {
+export async function GET(req: NextRequest): Promise<NextResponse> {
   if (!ADMIN_LOCK_ENABLED) {
     return json(
-      { lock: "disabled", unlocked: true },
+      { lock: "disabled" as const, unlocked: true },
       devHeaders({ LockEnabled: false })
     );
   }
@@ -134,7 +150,7 @@ export async function GET(req: NextRequest) {
 
   return json(
     {
-      lock: "enabled",
+      lock: "enabled" as const,
       unlocked,
       allowlisted: isAllowlisted,
       hasSecretConfigured: ADMIN_SHARED_SECRET.length > 0,
@@ -150,7 +166,7 @@ export async function GET(req: NextRequest) {
 }
 
 /** ---------- DELETE: clear cookie (re-lock this browser) ---------- */
-export async function DELETE() {
+export async function DELETE(): Promise<NextResponse> {
   const res = json({ ok: true });
   res.cookies.set(ADMIN_COOKIE, "", {
     httpOnly: true,

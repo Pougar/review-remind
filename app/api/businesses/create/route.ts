@@ -12,22 +12,74 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: true },
 });
 
+/* ========= Types ========= */
+type DebugResponse<T = unknown> = {
+  status: number;
+  headers: Record<string, string>;
+  data: T | null;
+};
+
+type AccountRow = {
+  id: string;
+  providerId: string;
+  userId: string;
+  accessToken: string | null;
+  refreshToken: string | null;
+  accessTokenExpiresAt: string | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+};
+
+type GbpAccounts = {
+  accounts?: Array<{ name?: string; accountName?: string }>;
+};
+
+type GbpLocations = {
+  locations?: Array<{
+    title?: string;
+    profile?: { description?: string };
+    phoneNumbers?: { primaryPhone?: string };
+    websiteUri?: string;
+    metadata?: { placeId?: string; mapsUri?: string; newReviewUri?: string };
+  }>;
+};
+
+type GbpInfo = {
+  displayName: string;
+  description: string | null;
+  phone: string | null;
+  website: string | null;
+  reviewLink: string | null;
+  mapsUrl: string | null;
+  placeId: string | null;
+  accountResource?: string | null;
+} | null;
+
+class GbpUnauthorizedError extends Error {
+  code?: number;
+  constructor(code?: number) {
+    super("GBP_UNAUTHORIZED");
+    this.name = "GbpUnauthorizedError";
+    this.code = code;
+  }
+}
+
 /* ========= Small debug helpers ========= */
-async function debugJsonResponse(resp: Response, label: string) {
+async function debugJsonResponse<T = unknown>(resp: Response, label: string): Promise<DebugResponse<T>> {
   const status = resp.status;
   const headersObj: Record<string, string> = {};
   try {
     for (const [k, v] of resp.headers.entries()) {
       headersObj[k] = v;
     }
-  } catch (err) {
+  } catch (err: unknown) {
     console.warn(`[DEBUG] ${label}: couldn't read headers`, err);
   }
 
   let rawText: string | null = null;
   try {
     rawText = await resp.text();
-  } catch (err) {
+  } catch (err: unknown) {
     console.warn(`[DEBUG] ${label}: couldn't read body text`, err);
   }
 
@@ -35,15 +87,12 @@ async function debugJsonResponse(resp: Response, label: string) {
   console.log(`[DEBUG] ${label}: headers=`, headersObj);
   console.log(`[DEBUG] ${label}: raw body=`, rawText);
 
-  let data: any = null;
+  let data: T | null = null;
   if (rawText) {
     try {
-      data = JSON.parse(rawText);
-    } catch (err) {
-      console.warn(
-        `[DEBUG] ${label}: failed to parse JSON from raw body`,
-        err
-      );
+      data = JSON.parse(rawText) as T;
+    } catch (err: unknown) {
+      console.warn(`[DEBUG] ${label}: failed to parse JSON from raw body`, err);
     }
   }
 
@@ -84,9 +133,7 @@ async function insertBusinessWithUniqueSlug(
   for (let i = 0; i < MAX_TRIES; i++) {
     const trySlug = i === 0 ? base : `${base}-${i + 1}`;
 
-    console.log(
-      `[DEBUG] insertBusinessWithUniqueSlug: trying slug "${trySlug}" for user ${userId}`
-    );
+    console.log(`[DEBUG] insertBusinessWithUniqueSlug: trying slug "${trySlug}" for user ${userId}`);
 
     const res = await client.query<{ id: string; slug: string }>(
       `
@@ -105,15 +152,10 @@ async function insertBusinessWithUniqueSlug(
     );
 
     if (res.rows.length > 0) {
-      console.log(
-        `[DEBUG] insertBusinessWithUniqueSlug: success with slug "${trySlug}" ->`,
-        res.rows[0]
-      );
+      console.log(`[DEBUG] insertBusinessWithUniqueSlug: success with slug "${trySlug}" ->`, res.rows[0]);
       return res.rows[0]; // { id, slug }
     } else {
-      console.log(
-        `[DEBUG] insertBusinessWithUniqueSlug: slug "${trySlug}" conflicted, retrying`
-      );
+      console.log(`[DEBUG] insertBusinessWithUniqueSlug: slug "${trySlug}" conflicted, retrying`);
     }
   }
 
@@ -122,35 +164,23 @@ async function insertBusinessWithUniqueSlug(
 }
 
 /* ========= Google Business Profile helper (FIXED URL) ========= */
-async function gbpPrimaryLocationInfo(accessToken: string) {
+async function gbpPrimaryLocationInfo(accessToken: string): Promise<GbpInfo> {
   console.log("[DEBUG][GBP] Starting gbpPrimaryLocationInfo");
 
   // ---- 1. List accounts ----
   console.log("[DEBUG][GBP] Fetching accounts...");
-  const acctResp = await fetch(
-    "https://mybusinessaccountmanagement.googleapis.com/v1/accounts",
-    {
-      headers: { Authorization: `Bearer ${accessToken}` },
-    }
-  );
+  const acctResp = await fetch("https://mybusinessaccountmanagement.googleapis.com/v1/accounts", {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
 
   if (acctResp.status === 401 || acctResp.status === 403) {
-    console.error(
-      "[ERROR][GBP] accounts call unauthorized",
-      acctResp.status
-    );
-    const err: any = new Error("GBP_UNAUTHORIZED");
-    err.code = acctResp.status;
-    throw err;
+    console.error("[ERROR][GBP] accounts call unauthorized", acctResp.status);
+    throw new GbpUnauthorizedError(acctResp.status);
   }
 
-  const acctDebug = await debugJsonResponse(acctResp, "GBP accounts");
+  const acctDebug = await debugJsonResponse<GbpAccounts>(acctResp, "GBP accounts");
   if (acctDebug.status < 200 || acctDebug.status >= 300) {
-    console.error(
-      "[ERROR][GBP] accounts call not ok",
-      acctDebug.status,
-      acctDebug.data
-    );
+    console.error("[ERROR][GBP] accounts call not ok", acctDebug.status, acctDebug.data);
     throw new Error(`GBP_ACCOUNTS_${acctDebug.status}`);
   }
 
@@ -160,17 +190,13 @@ async function gbpPrimaryLocationInfo(accessToken: string) {
   console.log("[DEBUG][GBP] firstAccount =", firstAccount);
 
   if (!firstAccount) {
-    console.warn(
-      "[WARN][GBP] No accounts found for this Google user. Returning null."
-    );
+    console.warn("[WARN][GBP] No accounts found for this Google user. Returning null.");
     return null;
   }
 
   const accountResourceName: string | undefined = firstAccount.name; // e.g. "accounts/10929925..."
   const accountHumanName: string =
-    firstAccount.accountName ||
-    firstAccount.name ||
-    "My Business";
+    (firstAccount.accountName && firstAccount.accountName) || (firstAccount.name ?? "My Business");
 
   console.log("[DEBUG][GBP] accountResourceName =", accountResourceName);
   console.log("[DEBUG][GBP] accountHumanName =", accountHumanName);
@@ -187,9 +213,7 @@ async function gbpPrimaryLocationInfo(accessToken: string) {
   ].join(",");
 
   if (!accountResourceName) {
-    console.warn(
-      "[WARN][GBP] No accountResourceName, cannot query locations. Returning fallback."
-    );
+    console.warn("[WARN][GBP] No accountResourceName, cannot query locations. Returning fallback.");
     return {
       displayName: accountHumanName,
       description: null,
@@ -202,8 +226,7 @@ async function gbpPrimaryLocationInfo(accessToken: string) {
     };
   }
 
-  // FIX: DO NOT encodeURIComponent the accountResourceName.
-  // We want /v1/accounts/1234567890/locations, not /v1/accounts%2F123...
+  // Do not encode accountResourceName; the API expects /v1/accounts/123/locations
   const locUrl =
     `https://mybusinessbusinessinformation.googleapis.com/v1/` +
     `${accountResourceName}/locations` +
@@ -216,23 +239,14 @@ async function gbpPrimaryLocationInfo(accessToken: string) {
   });
 
   if (locResp.status === 401 || locResp.status === 403) {
-    console.error(
-      "[ERROR][GBP] locations call unauthorized",
-      locResp.status
-    );
-    const err: any = new Error("GBP_UNAUTHORIZED");
-    err.code = locResp.status;
-    throw err;
+    console.error("[ERROR][GBP] locations call unauthorized", locResp.status);
+    throw new GbpUnauthorizedError(locResp.status);
   }
 
-  const locDebug = await debugJsonResponse(locResp, "GBP locations");
+  const locDebug = await debugJsonResponse<GbpLocations>(locResp, "GBP locations");
 
   if (locDebug.status < 200 || locDebug.status >= 300) {
-    console.error(
-      "[ERROR][GBP] locations call not ok",
-      locDebug.status,
-      locDebug.data
-    );
+    console.error("[ERROR][GBP] locations call not ok", locDebug.status, locDebug.data);
     throw new Error(`GBP_LOCATIONS_${locDebug.status}`);
   }
 
@@ -242,34 +256,19 @@ async function gbpPrimaryLocationInfo(accessToken: string) {
   console.log("[DEBUG][GBP] first location =", loc);
 
   // Build safe fallbacks
-  const displayName =
-    safeTrim(loc?.title) ||
-    safeTrim(accountHumanName) ||
-    "My Business";
-
-  const description: string | null =
-    safeTrim(loc?.profile?.description) ?? null;
-
-  const phone: string | null =
-    (loc?.phoneNumbers && safeTrim(loc.phoneNumbers.primaryPhone)) || null;
-
-  const website: string | null =
-    safeTrim(loc?.websiteUri) ?? null;
-
+  const displayName = safeTrim(loc?.title) || safeTrim(accountHumanName) || "My Business";
+  const description: string | null = safeTrim(loc?.profile?.description) ?? null;
+  const phone: string | null = (loc?.phoneNumbers && safeTrim(loc.phoneNumbers.primaryPhone)) || null;
+  const website: string | null = safeTrim(loc?.websiteUri) ?? null;
   const placeId: string | null = safeTrim(loc?.metadata?.placeId) ?? null;
 
   const reviewLink: string | null =
     safeTrim(loc?.metadata?.newReviewUri) ??
-    (placeId
-      ? `https://search.google.com/local/writereview?placeid=${encodeURIComponent(
-          placeId
-        )}`
-      : null);
+    (placeId ? `https://search.google.com/local/writereview?placeid=${encodeURIComponent(placeId)}` : null);
 
-  const mapsUrl: string | null =
-    safeTrim(loc?.metadata?.mapsUri) ?? null;
+  const mapsUrl: string | null = safeTrim(loc?.metadata?.mapsUri) ?? null;
 
-  const result = {
+  const result: GbpInfo = {
     displayName,
     description,
     phone,
@@ -286,6 +285,16 @@ async function gbpPrimaryLocationInfo(accessToken: string) {
 }
 
 /* ========= Route ========= */
+type CreateBody = { userId?: string };
+
+async function readJson<T>(req: NextRequest): Promise<T | null> {
+  try {
+    return (await req.json()) as unknown as T;
+  } catch {
+    return null;
+  }
+}
+
 export async function POST(req: NextRequest) {
   let client: PoolClient | null = null;
 
@@ -300,57 +309,36 @@ export async function POST(req: NextRequest) {
 
     if (!sessionUserId) {
       console.warn("[WARN]/api/businesses/create: UNAUTHENTICATED");
-      return NextResponse.json(
-        { error: "UNAUTHENTICATED", message: "Sign in required." },
-        { status: 401 }
-      );
+      return NextResponse.json({ error: "UNAUTHENTICATED", message: "Sign in required." }, { status: 401 });
     }
 
     // 2) Optional userId in body must match session
-    const body = await req.json().catch((err) => {
-      console.warn(
-        "[WARN]/api/businesses/create: req.json() failed, defaulting to {}",
-        err
-      );
-      return {};
-    });
+    const body = await readJson<CreateBody>(req);
+    console.log("[DEBUG]/api/businesses/create: request body =", body ?? {});
 
-    console.log("[DEBUG]/api/businesses/create: request body =", body);
-
-    const inputUserId: string | undefined = (body as any)?.userId;
+    const inputUserId: string | undefined = body?.userId;
     if (inputUserId && inputUserId !== sessionUserId) {
       console.warn(
         "[WARN]/api/businesses/create: FORBIDDEN user mismatch",
-        "inputUserId=",
-        inputUserId,
-        "sessionUserId=",
-        sessionUserId
+        "inputUserId=", inputUserId,
+        "sessionUserId=", sessionUserId
       );
-      return NextResponse.json(
-        { error: "FORBIDDEN", message: "User mismatch." },
-        { status: 403 }
-      );
+      return NextResponse.json({ error: "FORBIDDEN", message: "User mismatch." }, { status: 403 });
     }
     const userId = inputUserId ?? sessionUserId;
 
     // 3) Begin DB transaction + set RLS context
     console.log("[DEBUG]/api/businesses/create: connecting to DB...");
     client = await pool.connect();
-    console.log(
-      "[DEBUG]/api/businesses/create: BEGIN txn; setting app.user_id =",
-      userId
-    );
+    console.log("[DEBUG]/api/businesses/create: BEGIN txn; setting app.user_id =", userId);
 
     await client.query("BEGIN");
     await client.query(`SELECT set_config('app.user_id', $1, true)`, [userId]);
 
     // 4) Most recent Google account for this user
-    console.log(
-      "[DEBUG]/api/businesses/create: fetching latest google account for userId =",
-      userId
-    );
+    console.log("[DEBUG]/api/businesses/create: fetching latest google account for userId =", userId);
 
-    const acctRes = await client.query(
+    const acctRes = await client.query<AccountRow>(
       `
       SELECT id,
              "accountId",
@@ -372,12 +360,9 @@ export async function POST(req: NextRequest) {
       [userId]
     );
 
-    console.log(
-      "[DEBUG]/api/businesses/create: acctRes.rowCount =",
-      acctRes.rowCount
-    );
+    console.log("[DEBUG]/api/businesses/create: acctRes.rowCount =", acctRes.rowCount);
 
-    const provider = acctRes.rows[0] as any;
+    const provider: AccountRow | undefined = acctRes.rows[0];
 
     console.log("[DEBUG]/api/businesses/create: provider summary =", {
       id: provider?.id,
@@ -391,110 +376,67 @@ export async function POST(req: NextRequest) {
     });
 
     if (!provider) {
-      console.warn(
-        "[WARN]/api/businesses/create: No Google connection found for this user."
-      );
+      console.warn("[WARN]/api/businesses/create: No Google connection found for this user.");
       await client.query("ROLLBACK");
       return NextResponse.json(
-        {
-          error: "NOT_FOUND",
-          message: "No Google connection found for this user.",
-        },
+        { error: "NOT_FOUND", message: "No Google connection found for this user." },
         { status: 404 }
       );
     }
 
     if (!provider.accessToken) {
-      console.warn(
-        "[WARN]/api/businesses/create: Google row found but missing accessToken"
-      );
+      console.warn("[WARN]/api/businesses/create: Google row found but missing accessToken");
       await client.query("ROLLBACK");
       return NextResponse.json(
-        {
-          error: "NO_ACCESS_TOKEN",
-          message: "No access token stored. Please reconnect Google.",
-        },
+        { error: "NO_ACCESS_TOKEN", message: "No access token stored. Please reconnect Google." },
         { status: 400 }
       );
     }
 
     // 5) Call GBP to derive info (name, desc, phone, review link...)
-    console.log(
-      "[DEBUG]/api/businesses/create: calling gbpPrimaryLocationInfo..."
-    );
-    let gbpInfo: any;
+    console.log("[DEBUG]/api/businesses/create: calling gbpPrimaryLocationInfo...");
+    let gbpInfo: GbpInfo = null;
     try {
       gbpInfo = await gbpPrimaryLocationInfo(provider.accessToken);
-    } catch (e: any) {
-      console.error(
-        "[ERROR]/api/businesses/create: gbpPrimaryLocationInfo threw",
-        e?.code,
-        e?.message,
-        e?.stack
-      );
+    } catch (e: unknown) {
+      const code = (e as { code?: number } | null)?.code;
+      const message = e instanceof Error ? e.message : String(e);
+      console.error("[ERROR]/api/businesses/create: gbpPrimaryLocationInfo threw", code, message);
 
-      if (
-        e?.code === 401 ||
-        e?.code === 403 ||
-        e?.message === "GBP_UNAUTHORIZED"
-      ) {
+      if (code === 401 || code === 403 || message === "GBP_UNAUTHORIZED") {
         console.warn("[WARN]/api/businesses/create: GBP_UNAUTHORIZED");
         await client.query("ROLLBACK");
         return NextResponse.json(
-          {
-            error: "GBP_UNAUTHORIZED",
-            message:
-              "Google token invalid/expired. Please reconnect Google.",
-          },
+          { error: "GBP_UNAUTHORIZED", message: "Google token invalid/expired. Please reconnect Google." },
           { status: 401 }
         );
       }
-
-      gbpInfo = null; // fallback
+      // fallback: continue with null gbpInfo
+      gbpInfo = null;
     }
 
     console.log("[DEBUG]/api/businesses/create: gbpInfo =", gbpInfo);
 
     // Build values for INSERT
-    const displayName =
-      safeTrim(gbpInfo?.displayName) ||
-      "My Business";
-
-    const description: string | null =
-      safeTrim(gbpInfo?.description) ?? null;
-
+    const displayName = safeTrim(gbpInfo?.displayName) || "My Business";
+    const description: string | null = safeTrim(gbpInfo?.description) ?? null;
     // GBP API does NOT reliably expose an email field
     const businessEmail: string | null = null;
 
-    console.log(
-      "[DEBUG]/api/businesses/create: final business fields before insert =",
-      {
-        displayName,
-        description,
-        businessEmail,
-      }
-    );
+    console.log("[DEBUG]/api/businesses/create: final business fields before insert =", {
+      displayName,
+      description,
+      businessEmail,
+    });
 
     // 6) Insert business with unique slug
-    const bizRow = await insertBusinessWithUniqueSlug(
-      client,
-      userId,
-      displayName,
-      businessEmail,
-      description
-    );
-    console.log(
-      "[DEBUG]/api/businesses/create: bizRow from insertBusinessWithUniqueSlug =",
-      bizRow
-    );
+    const bizRow = await insertBusinessWithUniqueSlug(client, userId, displayName, businessEmail, description);
+    console.log("[DEBUG]/api/businesses/create: bizRow from insertBusinessWithUniqueSlug =", bizRow);
 
     const newBusinessId = bizRow.id;
 
     // 6b) Extra GBP metadata
-    console.log(
-      "[DEBUG]/api/businesses/create: updating GBP extras for business id =",
-      newBusinessId
-    );
+    console.log("[DEBUG]/api/businesses/create: updating GBP extras for business id =", newBusinessId);
 
     await client.query(
       `
@@ -504,7 +446,7 @@ export async function POST(req: NextRequest) {
         phone              = $3,
         website            = $4,
         maps_url           = $5,
-        google_place_id        = $6
+        google_place_id    = $6
       WHERE id = $1
       `,
       [
@@ -522,10 +464,7 @@ export async function POST(req: NextRequest) {
     const defaultBody =
       "We would really appreciate it if you left us a review. Please share your feedback using the buttons below.";
 
-    console.log(
-      "[DEBUG]/api/businesses/create: inserting default email_template for business id =",
-      newBusinessId
-    );
+    console.log("[DEBUG]/api/businesses/create: inserting default email_template for business id =", newBusinessId);
 
     await client.query(
       `
@@ -539,36 +478,24 @@ export async function POST(req: NextRequest) {
     console.log("[DEBUG]/api/businesses/create: COMMIT");
     await client.query("COMMIT");
 
-    console.log(
-      "[DEBUG]/api/businesses/create: success response ->",
-      { businessId: newBusinessId, slug: bizRow.slug }
-    );
+    console.log("[DEBUG]/api/businesses/create: success response ->", { businessId: newBusinessId, slug: bizRow.slug });
 
-    return NextResponse.json(
-      {
-        businessId: newBusinessId,
-        slug: bizRow.slug,
-      },
-      { status: 200 }
-    );
-  } catch (e: any) {
-    console.error(
-      "[FATAL]/api/businesses/create: top-level catch",
-      e?.message,
-      e?.stack
-    );
+    return NextResponse.json({ businessId: newBusinessId, slug: bizRow.slug }, { status: 200 });
+  } catch (e: unknown) {
+    const emsg = e instanceof Error ? e.message : String(e);
+    const estack = e instanceof Error ? e.stack : undefined;
+
+    console.error("[FATAL]/api/businesses/create: top-level catch", emsg, estack);
 
     try {
       if (client) {
         console.log("[DEBUG]/api/businesses/create: ROLLBACK due to error");
         await client.query("ROLLBACK");
       }
-    } catch (rollbackErr) {
-      console.error(
-        "[ERROR]/api/businesses/create: rollback failed",
-        (rollbackErr as any)?.message,
-        (rollbackErr as any)?.stack
-      );
+    } catch (rollbackErr: unknown) {
+      const rmsg = rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr);
+      const rstack = rollbackErr instanceof Error ? rollbackErr.stack : undefined;
+      console.error("[ERROR]/api/businesses/create: rollback failed", rmsg, rstack);
     }
 
     return NextResponse.json(
@@ -576,8 +503,8 @@ export async function POST(req: NextRequest) {
         error: "INTERNAL",
         message: "Could not create business from Google.",
         debug: {
-          message: e?.message ?? null,
-          stack: e?.stack ?? null,
+          message: emsg ?? null,
+          stack: estack ?? null,
         },
       },
       { status: 500 }
@@ -587,9 +514,7 @@ export async function POST(req: NextRequest) {
       console.log("[DEBUG]/api/businesses/create: releasing DB client");
       client.release();
     } else {
-      console.log(
-        "[DEBUG]/api/businesses/create: no DB client to release (likely failed before connect)"
-      );
+      console.log("[DEBUG]/api/businesses/create: no DB client to release (likely failed before connect)");
     }
   }
 }
