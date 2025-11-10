@@ -6,9 +6,18 @@ import { google } from "@ai-sdk/google";
 import { auth } from "@/app/lib/auth";
 
 /* ============================================================
-   PG Pool (singleton across HMR) — no eslint-disable, no `var`
+   Config
 ============================================================ */
-const globalForPg = globalThis as unknown as { _pgPoolMakeExcerpts?: Pool };
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+/* ============================================================
+   PG Pool (singleton across HMR)
+============================================================ */
+const globalForPg = globalThis as unknown as {
+  _pgPoolMakeExcerpts?: Pool;
+};
+
 function getPool(): Pool {
   if (!globalForPg._pgPoolMakeExcerpts) {
     const cs = process.env.DATABASE_URL;
@@ -23,14 +32,12 @@ function getPool(): Pool {
 }
 
 /* ============================================================
-   Helpers / Types
+   Types & Helpers
 ============================================================ */
-export const runtime = "nodejs";
-export const dynamic = "force-dynamic";
 
 type ReqBody = { businessId?: string };
 
-const isUUID = (v?: string | null) => !!v && /^[0-9a-fA-F-]{36}$/.test(v || "");
+const isUUID = (v?: string | null) => !!v && /^[0-9a-fA-F-]{36}$/.test(v);
 
 function truncate(s: string, max = 600): string {
   if (!s) return "";
@@ -66,7 +73,7 @@ type GeminiExcerpt = {
 };
 
 type GeminiPhraseGroup = {
-  phrase: string;
+  phrase_id: string; // MUST match one of the provided phrase IDs
   excerpts: GeminiExcerpt[];
 };
 
@@ -93,7 +100,6 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // RLS user
     const session = await auth.api.getSession({ headers: req.headers });
     const userId = session?.user?.id;
     if (!userId) {
@@ -104,22 +110,23 @@ export async function POST(req: NextRequest) {
     }
 
     db = await pool.connect();
-
-    // Start tx and set RLS context
     await db.query("BEGIN");
     await db.query(`SELECT set_config('app.user_id', $1, true)`, [userId]);
 
-    // ----- 1. Load phrases for this business
-    const phrasesQ = await db.query<{ id: string; phrase: string }>(
+    // ----- 1. Load phrases for this business (these are the ONLY allowed anchors)
+    const phrasesQ = await db.query<{
+      id: string;
+      phrase: string;
+    }>(
       `
       SELECT p.id, p.phrase
       FROM public.phrases p
       WHERE p.business_id = $1::uuid
       ORDER BY
         p.updated_at DESC NULLS LAST,
-        p.counts   DESC NULLS LAST,
-        p.id       DESC
-      LIMIT 20
+        p.counts    DESC NULLS LAST,
+        p.id        DESC
+      LIMIT 50
       `,
       [businessId]
     );
@@ -136,14 +143,10 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Map lower(phrase) -> { id, phrase }
-    const phraseMap = new Map<string, { id: string; phrase: string }>();
-    const phraseList = phrasesQ.rows.map((p) => {
-      phraseMap.set(p.phrase.toLowerCase(), { id: p.id, phrase: p.phrase });
-      return p.phrase;
-    });
+    const phrases = phrasesQ.rows;
+    const phraseIdSet = new Set(phrases.map((p) => p.id));
 
-    // ----- 2. Collect review text for this business (NO CAP)
+    // ----- 2. Collect review text for this business
 
     // Internal reviews
     const internalQ = await db.query<{
@@ -167,7 +170,7 @@ export async function POST(req: NextRequest) {
       [businessId]
     );
 
-    // Unclaimed Google reviews
+    // Unlinked Google reviews
     const googleQ = await db.query<{
       id: string;
       stars: number | null;
@@ -194,7 +197,6 @@ export async function POST(req: NextRequest) {
       [businessId]
     );
 
-    // Merge + sort recency
     const inputsWithTs = [
       ...internalQ.rows.map((r) => ({
         id: r.id,
@@ -214,7 +216,6 @@ export async function POST(req: NextRequest) {
       })),
     ].filter((row) => row.text.length > 0);
 
-    // sort by ts, then pick only needed fields (avoid unused `ts`) — NO CAP on count
     const inputs: InputItem[] = inputsWithTs
       .sort((a, b) => b.ts - a.ts)
       .map((o) => ({
@@ -238,18 +239,24 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Track which review IDs are valid and what type they are.
-    const allowedReviewIds = new Set(inputs.filter((i) => i.source === "reviews").map((i) => i.id));
+    // Allowed review IDs for validation
+    const allowedReviewIds = new Set(
+      inputs.filter((i) => i.source === "reviews").map((i) => i.id)
+    );
     const allowedGoogleIds = new Set(
       inputs.filter((i) => i.source === "google_reviews").map((i) => i.id)
     );
 
     /* ============================================================
-       3. Build Gemini prompt  ✅ ENFORCE DOMINANT SENTIMENT & NO CAP
+       3. Build Gemini prompt (phrase_id-based, exhaustive excerpts)
     ============================================================ */
+
     const modelInput = {
       business_id: businessId,
-      phrases: phraseList,
+      phrases: phrases.map((p) => ({
+        id: p.id,
+        phrase: p.phrase,
+      })),
       reviews: inputs.map((i) => ({
         id: i.id,
         source: i.source,
@@ -261,40 +268,48 @@ export async function POST(req: NextRequest) {
 
     const instructions = `
 Task:
-For each provided phrase, scan ALL provided reviews and (a) determine the phrase's DOMINANT sentiment ("good" vs "bad") based on how the phrase is used across the reviews, then (b) return EVERY matching excerpt (NO LIMIT) that clearly expresses that SAME dominant sentiment. Do NOT include excerpts whose sentiment does not match the phrase's dominant sentiment.
+You are given:
+- A list of phrases, each with a stable "id" and "phrase" text.
+- A list of reviews (some internal, some Google, all pre-filtered).
 
-How to determine "dominant" sentiment for a phrase:
-- Count how many CLEARLY positive mentions of the phrase exist vs clearly negative mentions in the provided reviews.
-- Positive/negative may use both text sentiment and star hints (5★ usually good; 1–2★ usually bad; 3★ neutral).
-- If positives > negatives → dominant = "good". If negatives > positives → dominant = "bad". If tied, prefer "good".
-- If the phrase is not clearly present in any review, return an empty array of excerpts for that phrase.
-
-Excerpts (NO LIMIT):
-- Return an excerpt for EVERY distinct mention of the phrase.
-- If a single review mentions the phrase multiple times, you MAY include MULTIPLE excerpts from that single review (one per distinct mention). Avoid duplicate/near-duplicate excerpts for the same mention.
-- Excerpts must be SHORT (≈1 sentence), a direct VERBATIM substring of the review text, and MUST NOT contain PII.
-- Each excerpt must include:
-  - "excerpt": the copied snippet,
-  - "sentiment": "good" or "bad" matching the phrase's dominant sentiment,
-  - "review_id": an ID that exists in the provided reviews,
-  - "is_unlinked_google": true iff that review's source is "google_reviews".
-- If the sentiment of a potential excerpt is ambiguous/neutral, SKIP it.
+For EACH phrase:
+1. Use BOTH the phrase text AND the reviews to determine where that phrase (or a clear close variant) is actually expressed.
+2. Determine the phrase's DOMINANT sentiment ("good" or "bad") based on ALL relevant, unambiguous mentions:
+   - Use text semantics plus star rating hints (5★ usually good; 1–2★ usually bad; 3★ neutral).
+   - If clearly more positive mentions → dominant = "good".
+   - If clearly more negative mentions → dominant = "bad".
+   - If tied or ambiguous, prefer "good".
+3. For that phrase, return an excerpt for EVERY CLEAR MENTION you can reliably detect:
+   - Do NOT arbitrarily cap the number of excerpts.
+   - If there are N distinct mentions across the provided reviews, aim to return N excerpts (or as many as clearly identifiable).
+   - Multiple excerpts from the same review are allowed if they reflect distinct mentions.
+   - Excerpts must:
+     - Be short (about one sentence).
+     - Be a VERBATIM substring of the corresponding review text.
+     - Contain NO PII.
+     - Match the phrase's DOMINANT sentiment. If an excerpt is neutral/ambiguous, skip it.
 
 Hard constraints:
-- ONLY use phrases from the "phrases" list; do NOT invent new phrases.
-- For each phrase, include ONLY excerpts whose "sentiment" matches that phrase's dominant sentiment (enforce this strictly).
-- Output MUST be valid JSON with no markdown fences.
+- You MUST use the provided phrase "id" to link excerpts.
+- DO NOT invent new phrase IDs.
+- DO NOT include phrases that are not in the "phrases" list.
+- For each returned phrase group:
+  - "phrase_id" MUST be one of the input phrase IDs.
+  - Every excerpt's "review_id" MUST be one of the provided reviews' IDs.
+  - "is_unlinked_google" MUST be true if and only if that review's source is "google_reviews".
+  - "sentiment" MUST be exactly the dominant sentiment for that phrase ("good" or "bad").
+- If a phrase has no clear mentions, return it either with an empty "excerpts" array or omit it.
 
-STRICT OUTPUT SHAPE:
+STRICT OUTPUT SHAPE (no markdown fences, exactly this JSON structure):
 {
   "phrases": [
     {
-      "phrase": "<MUST MATCH one of the provided phrases exactly>",
+      "phrase_id": "<id from input.phrases>",
       "excerpts": [
         {
-          "excerpt": "<short sentence excerpt (verbatim)>",
+          "excerpt": "<short verbatim snippet>",
           "sentiment": "good" | "bad",
-          "review_id": "<id from input.reviews[i].id>",
+          "review_id": "<id from input.reviews>",
           "is_unlinked_google": true | false
         }
       ]
@@ -304,7 +319,7 @@ STRICT OUTPUT SHAPE:
     `.trim();
 
     const prompt = `
-You are extracting example excerpts for marketing / QA dashboards. Follow the constraints exactly.
+You are generating tightly-linked excerpts for analytics dashboards.
 
 INPUT:
 ${JSON.stringify(modelInput, null, 2)}
@@ -341,13 +356,18 @@ ${instructions}
 
     if (!parsed || !Array.isArray(parsed.phrases)) {
       await db.query("ROLLBACK");
-      return NextResponse.json({ error: "BAD_MODEL_SHAPE" }, { status: 502 });
+      return NextResponse.json(
+        { error: "BAD_MODEL_SHAPE" },
+        { status: 502 }
+      );
     }
 
-    // ----- 6. Sanitize Gemini output (NO CAP on per-phrase excerpts)
+    /* ============================================================
+       6. Validate & normalize (phrase_id-based, no text matching)
+    ============================================================ */
+
     const cleanGroups: {
       phrase_id: string;
-      phrase: string;
       excerpts: {
         excerpt: string;
         sentiment: "good" | "bad";
@@ -355,18 +375,15 @@ ${instructions}
         is_unlinked_google: boolean;
       }[];
     }[] = [];
-    for (const p of phrasesQ.rows) {
-      phraseMap.set(p.phrase.toLowerCase(), { id: p.id, phrase: p.phrase });
-    }
 
     for (const group of parsed.phrases) {
-      const phraseRaw = String(group?.phrase ?? "").trim().slice(0, 120);
-      if (!phraseRaw) continue;
+      const phraseId = String(group?.phrase_id ?? "").trim();
+      if (!phraseId || !phraseIdSet.has(phraseId)) continue;
 
-      const match = phraseMap.get(phraseRaw.toLowerCase());
-      if (!match) continue;
+      const normalizedExcerpts = Array.isArray(group.excerpts)
+        ? group.excerpts
+        : [];
 
-      const normalized = Array.isArray(group.excerpts) ? group.excerpts : [];
       const cleanedForPhrase: {
         excerpt: string;
         sentiment: "good" | "bad";
@@ -374,15 +391,20 @@ ${instructions}
         is_unlinked_google: boolean;
       }[] = [];
 
-      // NO CAP: accept all excerpts returned by model (we still validate each)
-      for (const ex of normalized) {
+      for (const ex of normalizedExcerpts) {
         const rid = String(ex?.review_id ?? "").trim();
         if (!rid) continue;
 
         const fromGoogle = !!ex?.is_unlinked_google;
-        if (fromGoogle ? !allowedGoogleIds.has(rid) : !allowedReviewIds.has(rid)) continue;
+        if (fromGoogle) {
+          if (!allowedGoogleIds.has(rid)) continue;
+        } else {
+          if (!allowedReviewIds.has(rid)) continue;
+        }
 
-        const sentiment: "good" | "bad" = ex?.sentiment === "bad" ? "bad" : "good";
+        const sentiment: "good" | "bad" =
+          ex?.sentiment === "bad" ? "bad" : "good";
+
         const excerptText = String(ex?.excerpt ?? "").trim().slice(0, 350);
         if (!excerptText) continue;
 
@@ -396,8 +418,7 @@ ${instructions}
 
       if (cleanedForPhrase.length > 0) {
         cleanGroups.push({
-          phrase_id: match.id,
-          phrase: match.phrase,
+          phrase_id: phraseId,
           excerpts: cleanedForPhrase,
         });
       }
@@ -406,17 +427,28 @@ ${instructions}
     if (!cleanGroups.length) {
       await db.query("ROLLBACK");
       return NextResponse.json(
-        { success: true, message: "Model returned no usable excerpts.", phrases: [] },
+        {
+          success: true,
+          message: "Model returned no usable excerpts.",
+          phrases: [],
+        },
         { status: 200 }
       );
     }
 
-    // ----- 7. Persist excerpts
+    /* ============================================================
+       7. Persist excerpts (replace per phrase_id)
+    ============================================================ */
+
     let phrasesTouched = 0;
     let insertedExcerpts = 0;
 
     for (const group of cleanGroups) {
-      await db.query(`DELETE FROM public.excerpts WHERE phrase_id = $1`, [group.phrase_id]);
+      // Clear old excerpts for this phrase to avoid stale links
+      await db.query(
+        `DELETE FROM public.excerpts WHERE phrase_id = $1::uuid`,
+        [group.phrase_id]
+      );
 
       for (const ex of group.excerpts) {
         const happy = ex.sentiment === "good";
@@ -459,8 +491,9 @@ ${instructions}
       phrasesTouched++;
     }
 
-    // recompute good_count / bad_count
+    // ----- 8. Recompute per-phrase good/bad counts
     const affectedPhraseIds = cleanGroups.map((g) => g.phrase_id);
+
     await db.query(
       `
       WITH sums AS (
@@ -469,7 +502,7 @@ ${instructions}
           SUM(CASE WHEN e.happy IS TRUE  THEN 1 ELSE 0 END)::int AS good_count,
           SUM(CASE WHEN e.happy IS FALSE THEN 1 ELSE 0 END)::int AS bad_count
         FROM public.excerpts e
-        WHERE e.phrase_id = ANY($1)
+        WHERE e.phrase_id = ANY($1::uuid[])
         GROUP BY phrase_id
       )
       UPDATE public.phrases p
@@ -484,7 +517,7 @@ ${instructions}
 
     await db.query("COMMIT");
 
-    // ----- 8. Respond with summary
+    // ----- 9. Respond
     return NextResponse.json(
       {
         success: true,
@@ -500,13 +533,15 @@ ${instructions}
     try {
       if (db) await db.query("ROLLBACK");
     } catch {
-      /* ignore rollback error */
+      // ignore rollback error
     }
 
-    const msg = err instanceof Error ? err.stack ?? err.message : String(err);
+    const msg =
+      err instanceof Error ? err.stack ?? err.message : String(err);
     console.error("[/api/analytics/make-excerpts] error:", msg);
 
-    const lower = (err instanceof Error ? err.message : String(err)).toLowerCase();
+    const lower =
+      (err instanceof Error ? err.message : String(err)).toLowerCase();
     if (lower.includes("row-level security")) {
       return NextResponse.json(
         {

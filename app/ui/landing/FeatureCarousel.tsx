@@ -237,10 +237,10 @@ function EmailOutreachSlide({ active }: { active: boolean }) {
                   ref={happyBtnRef}
                   className="inline-flex items-center rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white shadow hover:bg-emerald-700"
                 >
-                  Happy — leave a public review
+                  Happy — leave a positive review
                 </button>
                 <button className="inline-flex items-center rounded-lg bg-rose-600 px-4 py-2.5 text-sm font-semibold text-white shadow hover:bg-rose-700">
-                  Unsatisfied — tell us privately
+                  Unsatisfied — tell us what went wrong
                 </button>
               </div>
               <div className="flex items-center gap-2 text-[12px] text-gray-500">
@@ -389,10 +389,14 @@ function AiMakerSlide({ active }: { active: boolean }) {
               </div>
               <div className="ml-auto"><Stars5 size={18} /></div>
             </div>
-            <p className="mt-4 text-[15px] leading-relaxed text-gray-800 text-center">
-              I had an amazing experience with upreview — <BoldPhraseList phrases={pickedPhrases} />.
-              Leaving a review was effortless and I’d happily recommend upreview to others.
-            </p>
+                <p className="mt-4 text-[15px] leading-relaxed text-gray-800 text-center">
+                I had an amazing experience with upreview. The <strong>Friendly Staff</strong> made everything feel
+                welcoming, <strong>Easy Booking</strong> meant scheduling was simple, and the
+                <strong> Clean Facility</strong> really stood out. There was <strong>No wait time</strong>,{" "}
+                <strong>Parking was easy</strong>, and the <strong>Quick turnaround</strong> showed how{" "}
+                <strong>Professional</strong> the whole service is. Leaving a review was effortless and I&apos;d
+                happily recommend upreview to others.
+                </p>
             <div className="mt-3 flex items-center justify-center text-[11px] text-gray-500">Looks like a Google review</div>
           </div>
         </div>

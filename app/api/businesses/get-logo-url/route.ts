@@ -2,11 +2,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { Pool, PoolClient } from "pg";
 import { auth } from "@/app/lib/auth";
+import { supabaseAdmin } from "@/app/lib/supabaseServer";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-/** ---------- PG pool (singleton across HMR, no `any`) ---------- */
 const globalForPg = globalThis as unknown as { __pgPool?: Pool };
 const pool =
   globalForPg.__pgPool ??
@@ -16,7 +16,9 @@ const pool =
   });
 globalForPg.__pgPool = pool;
 
-/** ---------- Types & helpers ---------- */
+const BUCKET = "company-logos";
+const SIGNED_TTL = 60 * 60 * 24; // 24h, tune as needed
+
 type Body = {
   userId?: string;
   businessId?: string;
@@ -29,10 +31,6 @@ type LogoRow = { url: string | null };
 
 const isNonEmpty = (v?: string) => typeof v === "string" && v.trim().length > 0;
 
-// Keep a small TTL so the client refreshes periodically.
-// If your URLs are static, feel free to bump this up.
-const DEFAULT_EXPIRES_IN_SECONDS = 300; // 5 minutes
-
 async function readJson<T>(req: NextRequest): Promise<T | null> {
   try {
     return (await req.json()) as unknown as T;
@@ -41,7 +39,6 @@ async function readJson<T>(req: NextRequest): Promise<T | null> {
   }
 }
 
-/** ---------- Route ---------- */
 export async function POST(req: NextRequest) {
   const body = await readJson<Body>(req);
 
@@ -49,7 +46,6 @@ export async function POST(req: NextRequest) {
   const businessId = body?.businessId?.trim();
   const businessSlug = body?.businessSlug?.trim();
 
-  // Fallback to session if userId not provided
   if (!isNonEmpty(userId)) {
     try {
       const sess = await auth.api.getSession({ headers: req.headers });
@@ -72,7 +68,7 @@ export async function POST(req: NextRequest) {
     await client.query("BEGIN");
     await client.query(`select set_config('app.user_id', $1, true)`, [userId]);
 
-    // Resolve business id (RLS enforced by policies)
+    // Resolve business id (same as before)
     let bid: string | null = null;
 
     if (isNonEmpty(businessId)) {
@@ -88,7 +84,6 @@ export async function POST(req: NextRequest) {
       );
       bid = res.rows[0]?.id ?? null;
     } else {
-      // Fallback: use last_active_business_id, then default_business_id, then most recent
       const res = await client.query<PrefRow>(
         `
         with pref as (
@@ -123,18 +118,39 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Fetch the logo URL
     const logoRes = await client.query<LogoRow>(
       `select company_logo_url as url from public.businesses where id = $1 limit 1`,
       [bid]
     );
     await client.query("COMMIT");
 
-    const url = logoRes.rows[0]?.url ?? null;
+    const path = logoRes.rows[0]?.url; // 🔑 stored path like `bid/logo.png`
+    if (!path) {
+      return NextResponse.json(
+        { url: null, message: "No logo configured." },
+        { status: 200, headers: { "Cache-Control": "no-store" } }
+      );
+    }
+
+    // Generate signed URL for private bucket
+    const { data, error } = await supabaseAdmin.storage
+      .from(BUCKET)
+      .createSignedUrl(path, SIGNED_TTL);
+
+    if (error || !data?.signedUrl) {
+      console.error("[get-logo-url] createSignedUrl error:", error);
+      return NextResponse.json(
+        { error: "SIGNED_URL_FAILED" },
+        { status: 500, headers: { "Cache-Control": "no-store" } }
+      );
+    }
 
     return NextResponse.json(
-      { url, expiresIn: DEFAULT_EXPIRES_IN_SECONDS, expiresAt: null },
-      { headers: { "Cache-Control": "no-store" } }
+      {
+        url: data.signedUrl,
+        expiresIn: SIGNED_TTL,
+      },
+      { status: 200, headers: { "Cache-Control": "no-store" } }
     );
   } catch (err: unknown) {
     try {

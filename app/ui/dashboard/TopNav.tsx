@@ -276,9 +276,6 @@ export default function TopNav() {
                     <img
                       src={avatarUrl}
                       className="h-full w-full object-cover"
-                      onError={(e) => {
-                        e.currentTarget.src = "/snakepic.png";
-                      }}
                       alt="Business logo"
                     />
                   </div>

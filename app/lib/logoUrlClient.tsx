@@ -26,15 +26,15 @@ async function fetchSigned(userId: string) {
 
 function addCacheBuster(u: string) {
   try {
-    const base = typeof window !== "undefined" ? window.location.origin : "https://www.upreview.com.au";
-    const url = new URL(u, base);
+    const url = new URL(u); // works for absolute URLs from Supabase
     url.searchParams.set("cb", String(Date.now()));
-    return url.pathname + url.search + url.hash;
+    return url.toString();  // ✅ keep origin + path + query
   } catch {
-    // Fallback (best effort)
+    // Fallback if u is relative or URL parsing fails
     return u + (u.includes("?") ? "&" : "?") + `cb=${Date.now()}`;
   }
 }
+
 
 /** Compute seconds until refresh from either expiresIn or expiresAt. */
 function computeRefreshDelaySeconds(resp: FetchResp) {
