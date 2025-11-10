@@ -128,8 +128,8 @@ export async function POST(req: NextRequest) {
         gr as (
           select
             timezone('UTC', coalesce(gr.published_at, gr.created_at))::date as day,
-            sum(case when gr.stars is not null and (gr.stars::float8) > 3    then 1 else 0 end)::int as good,
-            sum(case when gr.stars is not null and (gr.stars::float8) < 2.5  then 1 else 0 end)::int as bad
+            sum(case when gr.stars is not null and (gr.stars::float8) >= 3    then 1 else 0 end)::int as good,
+            sum(case when gr.stars is not null and (gr.stars::float8) <= 2.5  then 1 else 0 end)::int as bad
           from public.google_reviews gr
           where gr.business_id = $1
             and coalesce(gr.linked, false) = false

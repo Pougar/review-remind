@@ -97,6 +97,39 @@ export default function BusinessDetailsPage() {
   const emailValid = !businessEmail || /.+@.+\..+/.test(businessEmail.trim());
   const canSave = !!userId && !!businessId && !!displayName.trim() && emailValid && !saving;
 
+  // ---------- Status variant (purely visual; no logic change) ----------
+  const statusVariant = useMemo(() => {
+    if (!msg) return "idle" as const;
+    if (saving) return "loading" as const;
+    if (isError) return "error" as const;
+
+    const lowered = msg.toLowerCase();
+    if (
+      lowered.includes("saved") ||
+      lowered.includes("onboarded") ||
+      lowered.includes("ready")
+    ) {
+      return "success" as const;
+    }
+
+    return "info" as const;
+  }, [msg, isError, saving]);
+
+  const statusClasses = useMemo(() => {
+    switch (statusVariant) {
+      case "loading":
+        return "border-blue-200 bg-blue-50 text-blue-700";
+      case "success":
+        return "border-emerald-200 bg-emerald-50 text-emerald-700";
+      case "error":
+        return "border-red-200 bg-red-50 text-red-700";
+      case "info":
+        return "border-slate-200 bg-slate-50 text-slate-700";
+      default:
+        return "";
+    }
+  }, [statusVariant]);
+
   /* ---------- stage check & routing ---------- */
   useEffect(() => {
     if (isPending) return;
@@ -213,7 +246,7 @@ export default function BusinessDetailsPage() {
       setIsError(false);
 
       try {
-        // 🔁 Per your contract: POST only { businessId } in body
+        // Per contract: POST only { businessId } in body
         const res = await fetch(API.BUSINESSES_GET_DETAILS, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -337,68 +370,100 @@ export default function BusinessDetailsPage() {
 
   /* ---------- auth / loading guards ---------- */
   if (isPending || loading) {
-    return <div className="min-h-screen grid place-items-center bg-white text-slate-700">Loading…</div>;
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-white text-slate-700">
+        <div className="inline-flex items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm shadow-sm">
+          <span
+            className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-[2px] border-slate-500 border-t-transparent"
+            aria-hidden="true"
+          />
+          <span>Loading business details…</span>
+        </div>
+      </div>
+    );
   }
 
   if (!userId || !businessId) {
     return (
-      <div className="min-h-screen grid place-items-center bg-white text-slate-700 p-6">
-        Missing context. Please open this page via the onboarding flow.
+      <div className="min-h-screen flex items-center justify-center bg-white text-slate-700 p-6">
+        <div className="inline-flex max-w-full items-center gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 shadow-sm">
+          <span className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-red-500 text-white text-[0.6rem]">
+            !
+          </span>
+          <span>Missing context. Please open this page via the onboarding flow.</span>
+        </div>
       </div>
     );
   }
 
   /* ---------- UI ---------- */
   return (
-    <div className="bg-white text-slate-900">
-      <div className="mx-auto w-full max-w-3xl px-6 py-10">
-        <div className="mb-5">
-          <span className="rounded-md bg-slate-900 px-2 py-0.5 text-xs font-semibold text-white">
-            UpReview
-          </span>
-        </div>
+    <div className="text-slate-900">
+      <div className="mx-auto w-full max-w-3xl px-6 py-12">
+        {/* Heading */}
+        <h1 className="text-2xl sm:text-3xl font-semibold tracking-tight">
+          Confirm your business details
+        </h1>
+        <p className="mt-2 text-sm text-slate-600">
+          Review the information from your connected accounts and make any final adjustments
+          before finishing setup.
+        </p>
 
-        <div className="flex items-center justify-between pb-4 border-b border-slate-200">
-          <h1 className="text-base font-semibold text-slate-900">Business details</h1>
-          <button
-            type="button"
-            onClick={onSaveAndContinue}
-            disabled={!canSave}
-            className="inline-flex items-center rounded-md border border-indigo-600 bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-700 disabled:border-indigo-300 disabled:bg-indigo-300"
-          >
-            {saving ? "Saving…" : "Save & continue"}
-          </button>
-        </div>
+        {/* Status (matches link-google/link-xero style) */}
+        <div className="mt-4 min-h-[2.75rem]" aria-live="polite">
+          {msg && statusVariant !== "idle" && (
+            <div
+              className={`inline-flex max-w-full items-center gap-2 rounded-md border px-3 py-2 text-xs sm:text-sm shadow-sm ${statusClasses}`}
+            >
+              {/* Icon / spinner */}
+              {statusVariant === "loading" && (
+                <span
+                  className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-[2px] border-current border-t-transparent"
+                  aria-hidden="true"
+                />
+              )}
+              {statusVariant === "success" && (
+                <span className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-emerald-500 text-white text-[0.6rem]">
+                  ✓
+                </span>
+              )}
+              {statusVariant === "error" && (
+                <span className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-red-500 text-white text-[0.6rem]">
+                  !
+                </span>
+              )}
+              {statusVariant === "info" && (
+                <span className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-slate-400 text-white text-[0.6rem]">
+                  i
+                </span>
+              )}
 
-        {msg && (
-          <div
-            className={`mt-4 rounded-md border px-3 py-2 text-sm ${
-              isError
-                ? "border-rose-200 bg-rose-50 text-rose-700"
-                : "border-emerald-200 bg-emerald-50 text-emerald-700"
-            }`}
-          >
-            {msg}
-          </div>
-        )}
+              <span className="truncate">{msg}</span>
+            </div>
+          )}
+        </div>
 
         {/* Form */}
         <section className="mt-6 space-y-6">
           {/* Display name */}
           <div>
-            <label className="mb-2 block text-sm font-medium text-slate-900">Business name</label>
+            <label className="mb-2 block text-sm font-medium text-slate-900">
+              Business name
+            </label>
             <input
               type="text"
               value={displayName}
               onChange={(e) => setDisplayName(e.target.value)}
               placeholder="Your business name"
-              className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
+              className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-600 focus:ring-1 focus:ring-blue-600"
             />
           </div>
 
           {/* Business email */}
           <div>
-            <label className="mb-2 block text-sm font-medium text-slate-900">Business email</label>
+            <label className="mb-2 block text-sm font-medium text-slate-900">
+              Business email
+            </label>
             <input
               type="email"
               value={businessEmail}
@@ -407,7 +472,7 @@ export default function BusinessDetailsPage() {
               className={`w-full rounded-md border bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:ring-1 ${
                 businessEmail && !emailValid
                   ? "border-rose-400 focus:border-rose-500 focus:ring-rose-500"
-                  : "border-slate-300 focus:border-indigo-500 focus:ring-indigo-500"
+                  : "border-slate-300 focus:border-blue-600 focus:ring-blue-600"
               }`}
             />
             {businessEmail && !emailValid && (
@@ -415,27 +480,45 @@ export default function BusinessDetailsPage() {
             )}
           </div>
 
+          {/* Description */}
+          <div>
+            <label className="mb-2 block text-sm font-medium text-slate-900">
+              Short description
+            </label>
+            <textarea
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="A short sentence about what your business does."
+              rows={3}
+              className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-600 focus:ring-1 focus:ring-blue-600"
+            />
+          </div>
+
           {/* Google review link */}
           <div>
-            <label className="mb-2 block text-sm font-medium text-slate-900">Google review link</label>
+            <label className="mb-2 block text-sm font-medium text-slate-900">
+              Google review link
+            </label>
             <input
               type="url"
               value={googleReviewLink}
               onChange={(e) => setGoogleReviewLink(e.target.value)}
               placeholder="https://g.page/your-business or https://maps.google.com/..."
-              className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
+              className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-600 focus:ring-1 focus:ring-blue-600"
             />
           </div>
 
           {/* Slug */}
           <div>
-            <label className="mb-2 block text-sm font-medium text-slate-900">Business URL slug</label>
+            <label className="mb-2 block text-sm font-medium text-slate-900">
+              Business URL slug
+            </label>
             <input
               type="text"
               value={slugInput}
               onChange={(e) => setSlugInput(e.target.value)}
               placeholder="your-business"
-              className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
+              className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-600 focus:ring-1 focus:ring-blue-600"
             />
             <div className="mt-2 text-xs text-slate-600">
               Your dashboard URL will be:{" "}
@@ -445,6 +528,24 @@ export default function BusinessDetailsPage() {
             </div>
           </div>
         </section>
+
+        {/* Primary action */}
+        <div className="mt-8 flex justify-end">
+          <button
+            type="button"
+            onClick={onSaveAndContinue}
+            disabled={!canSave}
+            aria-disabled={!canSave}
+            className={`inline-flex items-center justify-center rounded-lg px-5 py-2.5 text-sm font-semibold transition
+              ${
+                !canSave
+                  ? "bg-slate-200 text-slate-500 cursor-not-allowed"
+                  : "bg-blue-600 text-white hover:bg-blue-700"
+              }`}
+          >
+            {saving ? "Saving…" : "Save & continue"}
+          </button>
+        </div>
       </div>
     </div>
   );
