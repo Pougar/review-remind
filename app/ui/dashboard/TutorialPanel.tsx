@@ -78,7 +78,7 @@ export default function TutorialPanel(props: { slug?: string | null; businessSlu
       title: "Intelligently automate review reminders",
       text: (
         <>
-          Import clients from Xero, then let Upreview nudge the right people at the right
+          Import clients from Xero, then let UpReview nudge the right people at the right
           time—without being intrusive. You’re always in control of who gets contacted.
           <ul className="mt-2 list-disc pl-5 text-gray-600">
             <li>Manage recipients directly on your Clients page.</li>
@@ -122,10 +122,10 @@ export default function TutorialPanel(props: { slug?: string | null; businessSlu
             fill="currentColor"
           />
         </svg>
-        <h2 className="text-base font-semibold">Getting started with Upreview</h2>
+        <h2 className="text-base font-semibold">Getting started with UpReview</h2>
       </div>
       <p className="text-sm text-gray-600">
-        Upreview helps your business in <span className="font-medium text-gray-800">three main ways</span>.
+        UpReview helps your business in <span className="font-medium text-gray-800">three main ways</span>.
         Explore each area below.
       </p>
 

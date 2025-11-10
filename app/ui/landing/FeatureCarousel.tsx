@@ -177,7 +177,7 @@ function EmailOutreachSlide({ active }: { active: boolean }) {
                 <div className="h-5 w-5 rounded-sm border border-blue-200 bg-white" />
                 <div className="grid h-8 w-8 place-items-center rounded-full bg-gradient-to-br from-blue-600 to-indigo-600 text-xs font-bold text-white">U</div>
                 <div className="min-w-0">
-                  <div className="truncate text-sm font-bold text-gray-900">Upreview</div>
+                  <div className="truncate text-sm font-bold text-gray-900">UpReview</div>
                   <div className="truncate text-[12px] text-gray-700">We would love your feedback!</div>
                 </div>
                 <div className="ml-auto text-xs text-gray-500">12:17</div>
@@ -209,7 +209,7 @@ function EmailOutreachSlide({ active }: { active: boolean }) {
             <div className="flex items-center gap-3 border-b bg-gray-50/80 px-4 py-2">
               <div className="grid h-7 w-7 place-items-center rounded-full bg-gradient-to-br from-blue-600 to-indigo-600 text-[11px] font-bold text-white">U</div>
               <div className="min-w-0">
-                <div className="truncate text-sm font-medium text-gray-900">Upreview</div>
+                <div className="truncate text-sm font-medium text-gray-900">UpReview</div>
                 <div className="truncate text-[11px] text-gray-500">&lt;onboarding@upreview.app&gt;</div>
               </div>
               <div className="ml-auto text-gray-400">⋯</div>
@@ -221,7 +221,7 @@ function EmailOutreachSlide({ active }: { active: boolean }) {
 
             <div className="px-6 py-6 space-y-4">
               <p className="text-[15px] leading-relaxed text-gray-800">
-                Hi <strong>Alex</strong>, thanks again for choosing <strong>Upreview</strong>. Your experience matters to us —
+                Hi <strong>Alex</strong>, thanks again for choosing <strong>UpReview</strong>. Your experience matters to us —
                 it helps us keep improving and also helps others choose with confidence.
               </p>
               <div className="rounded-xl bg-slate-50 ring-1 ring-slate-200 p-4 text-[14px] leading-relaxed text-slate-800">
@@ -390,12 +390,12 @@ function AiMakerSlide({ active }: { active: boolean }) {
               <div className="ml-auto"><Stars5 size={18} /></div>
             </div>
                 <p className="mt-4 text-[15px] leading-relaxed text-gray-800 text-center">
-                I had an amazing experience with upreview. The <strong>Friendly Staff</strong> made everything feel
+                I had an amazing experience with UpReview. The <strong>Friendly Staff</strong> made everything feel
                 welcoming, <strong>Easy Booking</strong> meant scheduling was simple, and the
                 <strong> Clean Facility</strong> really stood out. There was <strong>No wait time</strong>,{" "}
                 <strong>Parking was easy</strong>, and the <strong>Quick turnaround</strong> showed how{" "}
                 <strong>Professional</strong> the whole service is. Leaving a review was effortless and I&apos;d
-                happily recommend upreview to others.
+                happily recommend UpReview to others.
                 </p>
             <div className="mt-3 flex items-center justify-center text-[11px] text-gray-500">Looks like a Google review</div>
           </div>

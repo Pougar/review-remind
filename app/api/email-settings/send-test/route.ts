@@ -8,14 +8,9 @@ import { signMagicToken } from "@/app/lib/magic-token-signer";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-/* ============================================================
-   Resend
-   ============================================================ */
 const resend = new Resend(process.env.RESEND_API_KEY);
 
-/* ============================================================
-   PG Pool (singleton across HMR)
-   ============================================================ */
+/* ---------- PG Pool ---------- */
 declare global {
   // eslint-disable-next-line no-var
   var _pgPoolSendTestEmailBiz: Pool | undefined;
@@ -27,20 +22,16 @@ function getPool(): Pool {
     if (!cs) throw new Error("DATABASE_URL is not set");
     global._pgPoolSendTestEmailBiz = new Pool({
       connectionString: cs,
-      ssl: { rejectUnauthorized: false }, // keep consistent
+      ssl: { rejectUnauthorized: false },
       max: 5,
     });
   }
   return global._pgPoolSendTestEmailBiz;
 }
 
-/* ============================================================
-   Helpers
-   ============================================================ */
+/* ---------- Helpers ---------- */
 
-const isUUID = (v?: string | null) =>
-  !!v && /^[0-9a-fA-F-]{36}$/.test(v);
-
+const isUUID = (v?: string | null) => !!v && /^[0-9a-fA-F-]{36}$/.test(v);
 const emailLooksValid = (s: string) => /^\S+@\S+\.\S+$/.test(s);
 
 function escapeHtml(s: string) {
@@ -58,10 +49,7 @@ function nl2br(s: string) {
 
 function describeError(err: unknown) {
   if (err instanceof Error) {
-    return {
-      message: err.message,
-      stack: err.stack,
-    };
+    return { message: err.message, stack: err.stack };
   }
   if (typeof err === "string") {
     return { message: err, stack: undefined };
@@ -73,17 +61,30 @@ function describeError(err: unknown) {
   }
 }
 
-// We'll personalise [customer] → "Customer" in the preview email
 const CUSTOMER_TOKEN_REGEX = /\[customer\]/gi;
 
-// Where the CTA buttons in the email should send people
 const BASE_URL =
-  process.env.APP_ORIGIN /* e.g. https://yourdomain.com */ ||
-  "https://www.upreview.com.au";
+  process.env.APP_ORIGIN || "https://www.upreview.com.au";
 
-/* ============================================================
-   Types
-   ============================================================ */
+// ✅ your verified sending domain
+const RESEND_DOMAIN =
+  process.env.RESEND_DOMAIN || "reminders.upreview.com.au";
+
+// fallback if nothing else works
+const FALLBACK_FROM_EMAIL =
+  process.env.RESEND_FROM || `no-reply@${RESEND_DOMAIN}`;
+
+function makeSenderLocalPart(slug?: string | null): string | null {
+  if (!slug) return null;
+  const cleaned = slug
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-") // non alnum → hyphen
+    .replace(/^-+|-+$/g, "") // trim hyphens
+    .slice(0, 64); // be safe with length
+  return cleaned || null;
+}
+
+/* ---------- Types ---------- */
 
 type ReqBody = {
   businessId?: string;
@@ -93,16 +94,15 @@ type ReqBody = {
 type TemplateRow = {
   business_display_name: string | null;
   business_email: string | null;
+  business_slug: string | null; // NEW
   email_subject: string | null;
   email_body: string | null;
 };
 
-/* ============================================================
-   Route
-   ============================================================ */
+/* ---------- Route ---------- */
 
 export async function POST(req: NextRequest) {
-  // 1) Auth / RLS context
+  // 1) Auth
   const session = await auth.api.getSession({ headers: req.headers });
   const senderUserId = session?.user?.id;
   if (!senderUserId) {
@@ -111,7 +111,6 @@ export async function POST(req: NextRequest) {
       { status: 401 }
     );
   }
-  const authedUserId: string = senderUserId;
 
   // 2) Parse input
   const { businessId: rawBusinessId, toEmail: rawToEmail } =
@@ -149,15 +148,15 @@ export async function POST(req: NextRequest) {
   try {
     await db.query("BEGIN");
     await db.query(`SELECT set_config('app.user_id', $1, true)`, [
-      authedUserId,
+      senderUserId,
     ]);
 
-    // pull per-business template + business metadata
     const tplQ = await db.query<TemplateRow>(
       `
       SELECT
         b.display_name       AS business_display_name,
         b.business_email     AS business_email,
+        b.slug               AS business_slug,       -- make sure this matches your schema
         et.email_subject     AS email_subject,
         et.email_body        AS email_body
       FROM public.businesses b
@@ -185,9 +184,7 @@ export async function POST(req: NextRequest) {
   } catch (err: unknown) {
     try {
       await db.query("ROLLBACK");
-    } catch {
-      /* ignore */
-    }
+    } catch {}
     db.release();
 
     const info = describeError(err);
@@ -225,13 +222,41 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // 4) Build preview email content
-  // For test emails we don't have a real client record.
-  // We'll just pretend recipient is "Customer" and clientId = "test"
+  // 4) Build From header using business slug
+
+  const businessDisplayName = (
+    templateData.business_display_name || "Our Team"
+  ).trim();
+
+  const rawFromEmail = (templateData.business_email || "").trim().toLowerCase();
+
+  const looksLikePublicMailbox =
+    rawFromEmail.endsWith("@gmail.com") ||
+    rawFromEmail.endsWith("@yahoo.com") ||
+    rawFromEmail.endsWith("@outlook.com") ||
+    rawFromEmail.endsWith("@hotmail.com") ||
+    rawFromEmail === "";
+
+  const slugLocal = makeSenderLocalPart(templateData.business_slug);
+  const slugBasedFrom = slugLocal
+    ? `${slugLocal}@${RESEND_DOMAIN}`
+    : null;
+
+  // Priority:
+  // 1) custom-domain business_email
+  // 2) slug@reminders.upreview.com.au
+  // 3) no-reply@reminders.upreview.com.au
+  const fromAddress =
+    (!looksLikePublicMailbox && rawFromEmail) ||
+    slugBasedFrom ||
+    FALLBACK_FROM_EMAIL;
+
+  const fromHeader = `${businessDisplayName} <${fromAddress}>`;
+
+  // 5) Build content (unchanged)
   const clientName = "Customer";
   const clientId = "test";
 
-  // Generate a signed token for the preview link
   let signedToken: string;
   try {
     signedToken = signMagicToken({
@@ -250,25 +275,6 @@ export async function POST(req: NextRequest) {
       { status: 500 }
     );
   }
-
-  const businessDisplayName = (
-    templateData.business_display_name || "Our Team"
-  ).trim();
-
-  const rawFromEmail = (templateData.business_email || "").trim().toLowerCase();
-
-  // If it's a consumer mailbox (gmail/outlook/etc) Resend will reject it.
-  // For preview, fall back to the sandbox sender instead of throwing.
-  const looksLikePublicMailbox =
-    rawFromEmail.endsWith("@gmail.com") ||
-    rawFromEmail.endsWith("@yahoo.com") ||
-    rawFromEmail.endsWith("@outlook.com") ||
-    rawFromEmail.endsWith("@hotmail.com") ||
-    rawFromEmail === "";
-
-  const fromHeader = looksLikePublicMailbox
-    ? `${businessDisplayName} <onboarding@resend.dev>`
-    : `${businessDisplayName} <${rawFromEmail}>`;
 
   const baseSubject =
     templateData.email_subject ||
@@ -306,7 +312,6 @@ ${businessDisplayName}
     <p>${nl2br(finalBody)}</p>
 
     <div style="margin:24px 0;">
-      <!-- Happy / Positive button -->
       <a
         href="${goodHref}"
         style="
@@ -324,8 +329,6 @@ ${businessDisplayName}
       >
         Happy
       </a>
-
-      <!-- Unsatisfied / Negative button -->
       <a
         href="${badHref}"
         style="
@@ -350,7 +353,7 @@ ${businessDisplayName}
     </p>
   `.trim();
 
-  // 5) Send via Resend
+  // 6) Send
   try {
     await resend.emails.send({
       from: fromHeader,
@@ -367,19 +370,19 @@ ${businessDisplayName}
       {
         error: "SEND_FAILED",
         message:
-          "We couldn't send the test email. If you're using Gmail/Outlook/etc as the From address, you need to verify a custom domain in Resend or we'll fall back to the sandbox sender.",
+          "We couldn't send the test email. Please confirm your Resend domain & sender configuration.",
         resendError: info.message,
       },
       { status: 500 }
     );
   }
 
-  // 6) Respond success / preview
   return NextResponse.json(
     {
       success: true,
       sentTo: destEmail,
       businessId,
+      from: fromHeader,
       subjectPreview: finalSubject,
       bodyPreview: finalBody,
       linksPreview: {

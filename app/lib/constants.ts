@@ -1,5 +1,5 @@
 // Global app constants (names, routes, API endpoints, etc.)
-export const APP_NAME = "Upreview" as const;
+export const APP_NAME = "UpReview" as const;
 
 export type Slug = string;
 
@@ -57,7 +57,8 @@ export const API = {
   GET_GRAPH_INFO: "/api/analytics/get-graph-info",
   GET_CLIENTS: "/api/clients/get-clients",
   GET_CLIENTS_FROM_XERO: "/api/xero/get-clients-from-xero",
-  CLIENTS_SYNC_GOOGLE_REVIEWS: "/api/clients/sync-with-google-reviews",
+  CLIENTS_SYNC_GOOGLE_REVIEWS: "/api/google/sync-gr-with-clients",
+  LINK_GR_TO_CLIENTS: "/api/google/link-gr-to-clients",
   EMAILS_SEND_BULK: "/api/clients/send-bulk-emails",
   ADD_CLIENT: "/api/clients/add-client",
   GBU_COUNTS: "/api/analytics/get-gbu-counts",

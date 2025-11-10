@@ -34,8 +34,15 @@ if (!RAW_TOKEN_SECRET) {
 const TOKEN_SECRET: string = RAW_TOKEN_SECRET;
 
 const BASE_URL =
-  process.env.APP_ORIGIN /* e.g. https://your-prod-domain.com */ ||
+  process.env.APP_ORIGIN ||
   "https://www.upreview.com.au";
+
+// Your verified Resend domain + fallback sender
+const RESEND_DOMAIN =
+  process.env.RESEND_DOMAIN || "reminders.upreview.com.au";
+
+const FALLBACK_FROM_EMAIL =
+  process.env.RESEND_FROM || `no-reply@${RESEND_DOMAIN}`;
 
 /* ---------- Helpers ---------- */
 function escapeHtml(s: string) {
@@ -54,7 +61,6 @@ const CUSTOMER_TOKEN_REGEX = /\[customer\]/gi;
 
 const isUUID = (v?: string | null) => !!v && /^[0-9a-fA-F-]{36}$/.test(v);
 
-// NOTE: must match verifyMagicToken()
 function signLinkToken({
   businessId,
   clientId,
@@ -75,6 +81,27 @@ function signLinkToken({
   return Buffer.from(payloadJson).toString("base64url") + "." + sig;
 }
 
+function looksLikePublicMailbox(addr: string): boolean {
+  const lower = addr.toLowerCase();
+  return (
+    lower === "" ||
+    lower.endsWith("@gmail.com") ||
+    lower.endsWith("@yahoo.com") ||
+    lower.endsWith("@outlook.com") ||
+    lower.endsWith("@hotmail.com")
+  );
+}
+
+function makeSenderLocalPart(slug?: string | null): string | null {
+  if (!slug) return null;
+  const cleaned = slug
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 64);
+  return cleaned || null;
+}
+
 /* ---------- Types ---------- */
 type ReqBody = {
   businessId?: string;
@@ -84,6 +111,7 @@ type ReqBody = {
 type TemplateRow = {
   business_display_name: string | null;
   business_email: string | null;
+  business_slug: string | null; // NEW
   email_subject: string | null;
   email_body: string | null;
 };
@@ -138,7 +166,6 @@ export async function POST(req: NextRequest) {
 
   try {
     await db.query("BEGIN");
-    // Attach BetterAuth user ID for RLS on this connection
     await db.query(`SELECT set_config('app.user_id', $1, true)`, [
       authedUserId,
     ]);
@@ -149,6 +176,7 @@ export async function POST(req: NextRequest) {
       SELECT
         b.display_name AS business_display_name,
         b.business_email AS business_email,
+        b.slug AS business_slug,
         COALESCE(t.email_subject, 'Please leave us a review!') AS email_subject,
         COALESCE(
           t.email_body,
@@ -165,7 +193,6 @@ export async function POST(req: NextRequest) {
 
     if (tmplQ.rowCount === 0) {
       await db.query("ROLLBACK");
-      db.release();
       return NextResponse.json(
         {
           error: "NOT_ALLOWED_OR_NOT_FOUND",
@@ -205,7 +232,6 @@ export async function POST(req: NextRequest) {
       { status: 500 }
     );
   } finally {
-    // release the main connection
     db.release();
   }
 
@@ -216,10 +242,27 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // Template values
+  // ---------- From header: business name + slug-based address ----------
+
   const businessDisplayName =
     (templateData.business_display_name || "Our Team").trim();
-  const businessEmail = templateData.business_email || "";
+
+  const businessEmail = (templateData.business_email || "").trim();
+  const businessSlug = templateData.business_slug || null;
+
+  const slugLocal = makeSenderLocalPart(businessSlug);
+  const slugBasedFrom = slugLocal
+    ? `${slugLocal}@${RESEND_DOMAIN}`
+    : null;
+
+  const senderAddress =
+    (!looksLikePublicMailbox(businessEmail) && businessEmail) ||
+    slugBasedFrom ||
+    FALLBACK_FROM_EMAIL;
+
+  const baseFromHeader = `"${businessDisplayName}" <${senderAddress}>`;
+
+  // ---------- Template content ----------
 
   const baseSubject =
     templateData.email_subject || "Please leave us a review!";
@@ -227,10 +270,8 @@ export async function POST(req: NextRequest) {
     templateData.email_body ||
     "We would really appreciate if you left us a review. Please leave your feedback using the buttons below.";
 
-  // Prefer the business's own email address, fallback to sandbox
-  // (Removed previous unused `fromHeader` var to satisfy linter.)
+  // ---------- Prepare result structure ----------
 
-  // Prepare result structure
   const foundIds = new Set(clients.map((c) => c.id));
   const missingIds = clientIds.filter((id) => !foundIds.has(id));
   const results: {
@@ -238,6 +279,8 @@ export async function POST(req: NextRequest) {
     failed: { clientId: string; error: string }[];
     missing: string[];
   } = { sent: [], failed: [], missing: missingIds };
+
+  // ---------- Per-client send ----------
 
   async function sendOne(client: ClientRow) {
     if (!client.email) {
@@ -250,8 +293,9 @@ export async function POST(req: NextRequest) {
     const subj = baseSubject.replace(CUSTOMER_TOKEN_REGEX, clientName);
     const bodyCore = baseBody.replace(CUSTOMER_TOKEN_REGEX, clientName);
 
-    // 2. Build per-client signed token (MUST match verifyMagicToken expectations)
-    const expiresAtMs = Date.now() + 7 * 24 * 60 * 60 * 1000; // 7 days
+    // 2. Build per-client signed token
+    const expiresAtMs =
+      Date.now() + 7 * 24 * 60 * 60 * 1000; // 7 days
     const token = signLinkToken({
       businessId,
       clientId: client.id,
@@ -334,14 +378,9 @@ ${businessDisplayName}
       </p>
     `.trim();
 
-    // 5. FORCE a known-good "from" while in sandbox mode.
-    const sandboxFromHeader = `${businessDisplayName} <${
-      businessEmail || "onboarding@resend.dev"
-    }>`; // if custom email not verified, provider will ignore/override
-
-    // 6. Actually send, and CAPTURE the result (typed, no `any`)
+    // 5. Send via Resend with consistent from header
     const sendResult: ResendSendResult = await resend.emails.send({
-      from: sandboxFromHeader,
+      from: baseFromHeader,
       to: [client.email],
       subject: subj || "We’d love your feedback!",
       text,
@@ -355,10 +394,12 @@ ${businessDisplayName}
         : sendResult.error?.message;
 
     if (errorMsg || !messageId) {
-      throw new Error(errorMsg || "Email provider did not accept the send request");
+      throw new Error(
+        errorMsg || "Email provider did not accept the send request"
+      );
     }
 
-    // 7. Log to client_actions ONLY IF we actually sent successfully
+    // 6. Log to client_actions on success
     const dbc = await getPool().connect();
     try {
       await dbc.query("BEGIN");
@@ -404,7 +445,8 @@ ${businessDisplayName}
     }
   }
 
-  // Fan out over clients with small concurrency
+  // ---------- Fan out with small concurrency ----------
+
   const CONCURRENCY = 5;
   let cursor = 0;
 
@@ -425,13 +467,17 @@ ${businessDisplayName}
   }
 
   await Promise.all(
-    Array.from({ length: Math.min(CONCURRENCY, clients.length) }, () => worker())
+    Array.from(
+      { length: Math.min(CONCURRENCY, clients.length) },
+      () => worker()
+    )
   );
 
   return NextResponse.json(
     {
       success: true,
       ...results,
+      from: baseFromHeader,
     },
     { status: 200 }
   );
