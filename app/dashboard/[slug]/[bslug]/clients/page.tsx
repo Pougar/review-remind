@@ -445,22 +445,25 @@ export default function ClientsPage() {
         })
       : "—";
 
-  // Sorting: Never emailed first, then by oldest last email → newest.
-  // Among "never emailed", tie-break by added_at oldest → newest.
+  // Sorting:
+  // 1) Clients WITHOUT a submitted review first
+  // 2) Clients WITH a submitted review at the bottom
+  // 3) Within each group, order by recency of added_at (newest first)
   const sortedClients = useMemo(() => {
     const copy = [...clients];
     copy.sort((a, b) => {
-      const aSent = a.email_last_sent_at ? 1 : 0;
-      const bSent = b.email_last_sent_at ? 1 : 0;
-      if (aSent !== bSent) return aSent - bSent;
+      const aHasReview = !!a.review_submitted_at;
+      const bHasReview = !!b.review_submitted_at;
 
-      if (!a.email_last_sent_at && !b.email_last_sent_at) {
-        return new Date(a.added_at).getTime() - new Date(b.added_at).getTime();
+      if (aHasReview !== bHasReview) {
+        // No-review (false) first, reviewed (true) last
+        return aHasReview ? 1 : -1;
       }
-      return (
-        new Date(a.email_last_sent_at || 0).getTime() -
-        new Date(b.email_last_sent_at || 0).getTime()
-      );
+
+      // Same review status → sort by added_at descending (more recent first)
+      const aTime = new Date(a.added_at).getTime();
+      const bTime = new Date(b.added_at).getTime();
+      return bTime - aTime;
     });
     return copy;
   }, [clients]);
@@ -973,25 +976,20 @@ function InvoiceStatusBadge({
 
   switch (status) {
     case "PAID":
-      styles =
-        "bg-green-100 text-green-800 ring-green-200";
+      styles = "bg-green-100 text-green-800 ring-green-200";
       break;
     case "SENT":
-      styles =
-        "bg-sky-100 text-sky-800 ring-sky-200";
+      styles = "bg-sky-100 text-sky-800 ring-sky-200";
       break;
     case "DRAFT":
-      styles =
-        "bg-gray-100 text-gray-700 ring-gray-200";
+      styles = "bg-gray-100 text-gray-700 ring-gray-200";
       break;
     case "PAID BUT NOT SENT":
-      styles =
-        "bg-green-100 text-green-800 ring-green-200";
+      styles = "bg-green-100 text-green-800 ring-green-200";
       break;
     default:
       label = "—";
-      styles =
-        "bg-gray-100 text-gray-700 ring-gray-200";
+      styles = "bg-gray-100 text-gray-700 ring-gray-200";
   }
 
   return (
@@ -1014,21 +1012,15 @@ function StatusCell({
 }) {
   let label = "No email sent";
   let when: string | null = null;
-  let styles =
-    "bg-gray-100 text-gray-700 ring-gray-200";
+  let styles = "bg-gray-100 text-gray-700 ring-gray-200";
 
   if (submittedAt) {
     label = "Review submitted";
     when = new Date(submittedAt).toLocaleString();
-    styles =
-      "bg-green-50 text-green-800 ring-green-200";
+    styles = "bg-green-50 text-green-800 ring-green-200";
   } else {
-    const clickTime = clickAt
-      ? new Date(clickAt).getTime()
-      : null;
-    const emailTime = emailLastSentAt
-      ? new Date(emailLastSentAt).getTime()
-      : null;
+    const clickTime = clickAt ? new Date(clickAt).getTime() : null;
+    const emailTime = emailLastSentAt ? new Date(emailLastSentAt).getTime() : null;
 
     if (clickTime !== null || emailTime !== null) {
       const mostRecent =
@@ -1039,13 +1031,11 @@ function StatusCell({
       if (clickTime !== null && mostRecent === clickTime) {
         label = "Button clicked";
         when = new Date(clickTime).toLocaleString();
-        styles =
-          "bg-amber-50 text-amber-800 ring-amber-200";
+        styles = "bg-amber-50 text-amber-800 ring-amber-200";
       } else if (emailTime !== null) {
         label = "Last email sent";
         when = new Date(emailTime).toLocaleString();
-        styles =
-          "bg-blue-50 text-blue-800 ring-blue-200";
+        styles = "bg-blue-50 text-blue-800 ring-blue-200";
       }
     }
   }
@@ -1117,10 +1107,8 @@ function ReviewContent({
 }) {
   const hint = useMemo(() => {
     const v = sentiment?.toLowerCase();
-    if (v === "good")
-      return "This client left a positive sentiment.";
-    if (v === "bad")
-      return "This client left a negative sentiment.";
+    if (v === "good") return "This client left a positive sentiment.";
+    if (v === "bad") return "This client left a negative sentiment.";
     return "This client hasn’t been reviewed yet.";
   }, [sentiment]);
 
@@ -1163,16 +1151,8 @@ function ClickTargetCheckbox({
   return (
     <label
       className="-m-2 inline-flex items-center p-2 rounded-md select-none"
-      onClick={
-        stopRowClick
-          ? (e) => e.stopPropagation()
-          : undefined
-      }
-      onMouseDown={
-        stopRowClick
-          ? (e) => e.stopPropagation()
-          : undefined
-      }
+      onClick={stopRowClick ? (e) => e.stopPropagation() : undefined}
+      onMouseDown={stopRowClick ? (e) => e.stopPropagation() : undefined}
     >
       <input
         type="checkbox"
@@ -1180,16 +1160,8 @@ function ClickTargetCheckbox({
         className="h-4 w-4 rounded border-gray-300 text-blue-600"
         checked={checked}
         onChange={(e) => onChange(e.target.checked)}
-        onClick={
-          stopRowClick
-            ? (e) => e.stopPropagation()
-            : undefined
-        }
-        onMouseDown={
-          stopRowClick
-            ? (e) => e.stopPropagation()
-            : undefined
-        }
+        onClick={stopRowClick ? (e) => e.stopPropagation() : undefined}
+        onMouseDown={stopRowClick ? (e) => e.stopPropagation() : undefined}
       />
     </label>
   );
@@ -1216,9 +1188,7 @@ function GoogleSyncModal({
 }) {
   const allSelected =
     matches.length > 0 &&
-    matches.every((m) =>
-      selectedKeys.has(googleMatchKey(m))
-    );
+    matches.every((m) => selectedKeys.has(googleMatchKey(m)));
   const someSelected =
     selectedKeys.size > 0 && !allSelected;
   const hasSelection = selectedKeys.size > 0;
@@ -1284,8 +1254,7 @@ function GoogleSyncModal({
             <tbody>
               {matches.map((m) => {
                 const key = googleMatchKey(m);
-                const checked =
-                  selectedKeys.has(key);
+                const checked = selectedKeys.has(key);
                 return (
                   <tr
                     key={key}
