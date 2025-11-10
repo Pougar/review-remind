@@ -33,6 +33,41 @@ export default function LinkGooglePage() {
 
   const disabled = isPending || !userId || checking || working;
 
+  // Derive a visual style for the status message (purely presentational)
+  const statusVariant = useMemo(() => {
+    if (!statusMsg) return "idle" as const;
+
+    const msg = statusMsg.toLowerCase();
+
+    if (checking || working || msg.includes("checking") || msg.includes("creating your business")) {
+      return "loading" as const;
+    }
+
+    if (msg.includes("✓") || msg.includes("connected with business profile access")) {
+      return "success" as const;
+    }
+
+    if (
+      msg.includes("expired") ||
+      msg.includes("failed") ||
+      msg.includes("could not") ||
+      msg.includes("unexpected server response")
+    ) {
+      return "error" as const;
+    }
+
+    if (
+      msg.includes("not connected yet") ||
+      msg.includes("please reconnect") ||
+      msg.includes("please grant") ||
+      msg.includes("no google connection found")
+    ) {
+      return "warning" as const;
+    }
+
+    return "info" as const;
+  }, [statusMsg, checking, working]);
+
   // --- API helpers ---
   const hasConnection = useCallback(async (): Promise<{ connected: boolean; scopeOk: boolean }> => {
     if (!userId) return { connected: false, scopeOk: false };
@@ -70,40 +105,43 @@ export default function LinkGooglePage() {
     }
   }, [userId]);
 
-  const createBusinessFromGoogle = useCallback(async (): Promise<{ businessId: string; slug: string } | null> => {
-    setWorking(true);
-    setStatusMsg("Creating your business from Google…");
-    try {
-      const r = await fetch(API.BUSINESSES_CREATE, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        cache: "no-store",
-        body: JSON.stringify({ userId }),
-      });
-      if (r.status === 401) {
-        setStatusMsg("Google token expired. Please reconnect Google.");
-        return null;
+  const createBusinessFromGoogle = useCallback(
+    async (): Promise<{ businessId: string; slug: string } | null> => {
+      setWorking(true);
+      setStatusMsg("Creating your business from Google…");
+      try {
+        const r = await fetch(API.BUSINESSES_CREATE, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          cache: "no-store",
+          body: JSON.stringify({ userId }),
+        });
+        if (r.status === 401) {
+          setStatusMsg("Google token expired. Please reconnect Google.");
+          return null;
+        }
+        if (r.status === 404) {
+          setStatusMsg("No Google connection found for this account.");
+          return null;
+        }
+        if (!r.ok) {
+          const msg = await r.text().catch(() => "");
+          setStatusMsg(msg || "Failed to create business from Google.");
+          return null;
+        }
+        const json = (await r.json().catch(() => ({}))) as { businessId?: string; slug?: string };
+        if (!json.businessId || !json.slug) {
+          setStatusMsg("Unexpected server response creating the business.");
+          return null;
+        }
+        return { businessId: json.businessId, slug: json.slug };
+      } finally {
+        setWorking(false);
       }
-      if (r.status === 404) {
-        setStatusMsg("No Google connection found for this account.");
-        return null;
-      }
-      if (!r.ok) {
-        const msg = await r.text().catch(() => "");
-        setStatusMsg(msg || "Failed to create business from Google.");
-        return null;
-      }
-      const json = (await r.json().catch(() => ({}))) as { businessId?: string; slug?: string };
-      if (!json.businessId || !json.slug) {
-        setStatusMsg("Unexpected server response creating the business.");
-        return null;
-      }
-      return { businessId: json.businessId, slug: json.slug };
-    } finally {
-      setWorking(false);
-    }
-  }, [userId]);
+    },
+    [userId]
+  );
 
   const recordGoogleConnected = useCallback(async (businessId: string) => {
     try {
@@ -139,7 +177,15 @@ export default function LinkGooglePage() {
       )}/add-business/link-xero?bid=${encodeURIComponent(created.businessId)}`;
       router.replace(dest);
     })();
-  }, [isPending, userId, hasConnection, createBusinessFromGoogle, recordGoogleConnected, userSlug, router]);
+  }, [
+    isPending,
+    userId,
+    hasConnection,
+    createBusinessFromGoogle,
+    recordGoogleConnected,
+    userSlug,
+    router,
+  ]);
 
   // Kick off OAuth
   const onConnect = useCallback(async () => {
@@ -169,19 +215,72 @@ export default function LinkGooglePage() {
     }
   }, [isPending, userId, userSlug, router]);
 
+  // Map variant to Tailwind classes (visual only)
+  const statusClasses = useMemo(() => {
+    switch (statusVariant) {
+      case "loading":
+        return "border-blue-200 bg-blue-50 text-blue-700";
+      case "success":
+        return "border-emerald-200 bg-emerald-50 text-emerald-700";
+      case "error":
+        return "border-red-200 bg-red-50 text-red-700";
+      case "warning":
+        return "border-amber-200 bg-amber-50 text-amber-800";
+      case "info":
+        return "border-slate-200 bg-slate-50 text-slate-700";
+      default:
+        return "";
+    }
+  }, [statusVariant]);
+
   return (
     <div className="text-slate-900">
       <div className="mx-auto w-full max-w-3xl px-6 py-12">
-
-        <h1 className="text-2xl sm:text-3xl font-semibold tracking-tight">Link your Google account</h1>
+        <h1 className="text-2xl sm:text-3xl font-semibold tracking-tight">
+          Link your Google account
+        </h1>
         <p className="mt-2 text-sm text-slate-600">
           Connect the Google account that owns or manages your Business Profile so we can securely
           fetch reviews and help you reply.
         </p>
 
         {/* Status */}
-        <div className="mt-4 min-h-[1.25rem] text-sm" aria-live="polite">
-          {statusMsg}
+        <div className="mt-4 min-h-[2.75rem]" aria-live="polite">
+          {statusMsg && statusVariant !== "idle" && (
+            <div
+              className={`inline-flex max-w-full items-center gap-2 rounded-md border px-3 py-2 text-xs sm:text-sm shadow-sm ${statusClasses}`}
+            >
+              {/* Icon / spinner */}
+              {statusVariant === "loading" && (
+                <span
+                  className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-[2px] border-current border-t-transparent"
+                  aria-hidden="true"
+                />
+              )}
+              {statusVariant === "success" && (
+                <span className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-emerald-500 text-white text-[0.6rem]">
+                  ✓
+                </span>
+              )}
+              {statusVariant === "error" && (
+                <span className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-red-500 text-white text-[0.6rem]">
+                  !
+                </span>
+              )}
+              {statusVariant === "warning" && (
+                <span className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-amber-500 text-white text-[0.6rem]">
+                  !
+                </span>
+              )}
+              {statusVariant === "info" && (
+                <span className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-slate-400 text-white text-[0.6rem]">
+                  i
+                </span>
+              )}
+
+              <span className="truncate">{statusMsg}</span>
+            </div>
+          )}
         </div>
 
         {/* Actions */}
@@ -192,36 +291,18 @@ export default function LinkGooglePage() {
             disabled={disabled}
             aria-disabled={disabled}
             className={`inline-flex items-center justify-center rounded-lg px-5 py-3 text-sm font-semibold transition
-              ${disabled ? "bg-slate-200 text-slate-500 cursor-not-allowed" : "bg-blue-600 text-white hover:bg-blue-700"}`}
+              ${
+                disabled
+                  ? "bg-slate-200 text-slate-500 cursor-not-allowed"
+                  : "bg-blue-600 text-white hover:bg-blue-700"
+              }`}
           >
             Connect Google Business
           </button>
 
-          {/* “Recheck” + back */}
-          <div className="flex items-center gap-3 text-sm">
-            <button
-              type="button"
-              onClick={() => void hasConnection()}
-              disabled={disabled}
-              className={`underline-offset-2 hover:underline ${
-                disabled ? "text-slate-400 cursor-not-allowed" : "text-slate-700"
-              }`}
-            >
-              {checking ? "Checking…" : "Recheck"}
-            </button>
-
-            <button
-              type="button"
-              onClick={() => router.push(`${ROUTES.DASHBOARD}/${encodeURIComponent(userSlug)}`)}
-              className="text-slate-700 underline-offset-4 hover:underline"
-            >
-              Back to dashboard
-            </button>
-          </div>
-
           <p className="pt-2 text-xs text-slate-500">
-            We request the <code>business.manage</code> scope to list locations, read reviews, and manage replies.
-            You can revoke access at any time.
+            We request the <code>business.manage</code> scope to list locations, read reviews, and
+            manage replies. You can revoke access at any time.
           </p>
         </div>
       </div>

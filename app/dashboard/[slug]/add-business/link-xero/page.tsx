@@ -40,6 +40,60 @@ export default function LinkXeroPage() {
   const [connectDisabled, setConnectDisabled] = useState(false);
   const navigatedRef = useRef(false); // prevent double navigations
 
+  // ---------- Status variant (purely visual) ----------
+  const statusVariant = useMemo(() => {
+    if (!statusMsg) return "idle" as const;
+
+    const msg = statusMsg.toLowerCase();
+
+    if (checking || connectDisabled || msg.includes("checking xero connection")) {
+      return "loading" as const;
+    }
+
+    if (msg.includes("xero connected ✓") || msg.startsWith("xero connected ✓")) {
+      return "success" as const;
+    }
+
+    if (
+      msg.includes("failed") ||
+      msg.includes("could not") ||
+      msg.includes("missing or invalid business id") ||
+      msg.includes("missing authorize url") ||
+      msg.includes("popup was blocked") ||
+      msg.includes("error")
+    ) {
+      return "error" as const;
+    }
+
+    if (
+      msg.includes("not connected to xero yet") ||
+      msg.includes("once you've connected") ||
+      msg.includes("return here and refresh")
+    ) {
+      return "warning" as const;
+    }
+
+    return "info" as const;
+  }, [statusMsg, checking, connectDisabled]);
+
+  // Map variant to Tailwind classes
+  const statusClasses = useMemo(() => {
+    switch (statusVariant) {
+      case "loading":
+        return "border-blue-200 bg-blue-50 text-blue-700";
+      case "success":
+        return "border-emerald-200 bg-emerald-50 text-emerald-700";
+      case "error":
+        return "border-red-200 bg-red-50 text-red-700";
+      case "warning":
+        return "border-amber-200 bg-amber-50 text-amber-800";
+      case "info":
+        return "border-slate-200 bg-slate-50 text-slate-700";
+      default:
+        return "";
+    }
+  }, [statusVariant]);
+
   // --- helpers ---
 
   // Check current onboarding stage and route accordingly
@@ -62,8 +116,7 @@ export default function LinkXeroPage() {
       }
 
       const stage = data.stage as Stage | undefined;
-      if (!stage) return;
-      if (navigatedRef.current) return;
+      if (!stage || navigatedRef.current) return;
 
       switch (stage) {
         case "link_google":
@@ -116,9 +169,7 @@ export default function LinkXeroPage() {
       }
     } catch (e: unknown) {
       setStatusMsg(
-        e instanceof Error
-          ? e.message
-          : "Could not check onboarding stage."
+        e instanceof Error ? e.message : "Could not check onboarding stage."
       );
     }
   }, [businessId, router, slug, nextDest]);
@@ -254,16 +305,13 @@ export default function LinkXeroPage() {
       const newTab = window.open(authorizeUrl, "_blank");
 
       if (newTab) {
-        // Ensure no reference back for security; avoids noopener/null issues.
         newTab.opener = null;
         setStatusMsg(
-          "Xero connection page opened in a new tab. Once you've connected, return here and click Recheck."
+          "Xero connection page opened in a new tab. Once you've connected, return here and refresh this page to update your status."
         );
       } else {
-        // Popup blocked: we DON'T hijack this tab; we just give the URL.
         setStatusMsg(
-          "Popup was blocked. Please allow pop-ups for this site and try again, or open this link manually: " +
-            authorizeUrl
+          "Popup was blocked. Please allow pop-ups for this site and try again, or open the Xero link manually."
         );
       }
     } catch (e: unknown) {
@@ -297,11 +345,42 @@ export default function LinkXeroPage() {
         </p>
 
         {/* Status */}
-        <div
-          className="mt-4 min-h-[1.25rem] text-sm"
-          aria-live="polite"
-        >
-          {statusMsg}
+        <div className="mt-4 min-h-[2.75rem]" aria-live="polite">
+          {statusMsg && statusVariant !== "idle" && (
+            <div
+              className={`inline-flex max-w-full items-center gap-2 rounded-md border px-3 py-2 text-xs sm:text-sm shadow-sm ${statusClasses}`}
+            >
+              {/* Icon / spinner */}
+              {statusVariant === "loading" && (
+                <span
+                  className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-[2px] border-current border-t-transparent"
+                  aria-hidden="true"
+                />
+              )}
+              {statusVariant === "success" && (
+                <span className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-emerald-500 text-white text-[0.6rem]">
+                  ✓
+                </span>
+              )}
+              {statusVariant === "error" && (
+                <span className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-red-500 text-white text-[0.6rem]">
+                  !
+                </span>
+              )}
+              {statusVariant === "warning" && (
+                <span className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-amber-500 text-white text-[0.6rem]">
+                  !
+                </span>
+              )}
+              {statusVariant === "info" && (
+                <span className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-slate-400 text-white text-[0.6rem]">
+                  i
+                </span>
+              )}
+
+              <span className="truncate">{statusMsg}</span>
+            </div>
+          )}
         </div>
 
         {/* Actions */}
@@ -319,33 +398,6 @@ export default function LinkXeroPage() {
           >
             Connect to Xero
           </button>
-
-          <div className="flex items-center gap-3 text-sm">
-            <button
-              type="button"
-              onClick={() => void checkConnection()}
-              disabled={disabled}
-              className={`underline-offset-2 hover:underline ${
-                disabled
-                  ? "text-slate-400 cursor-not-allowed"
-                  : "text-slate-700"
-              }`}
-            >
-              {checking ? "Checking…" : "Recheck"}
-            </button>
-
-            <button
-              type="button"
-              onClick={() =>
-                router.push(
-                  `${ROUTES.DASHBOARD}/${encodeURIComponent(slug)}`
-                )
-              }
-              className="text-slate-700 underline-offset-4 hover:underline"
-            >
-              Back to dashboard
-            </button>
-          </div>
 
           <p className="pt-2 text-xs text-slate-500">
             You can revoke access at any time in Xero. We only read invoice

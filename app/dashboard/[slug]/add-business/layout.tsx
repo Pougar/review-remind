@@ -240,7 +240,7 @@ export default function AddBusinessLayout({ children }: { children: React.ReactN
             {/* Left: Brand */}
             <div className="flex items-center gap-2">
               <span className="rounded-md bg-slate-900 px-2 py-0.5 text-xs font-semibold text-white">
-                upreview
+                UpReview
               </span>
               <span className="hidden sm:inline text-xs text-slate-500">Business onboarding</span>
             </div>

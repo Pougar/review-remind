@@ -354,7 +354,7 @@ export default function BusinessDetailsPage() {
       <div className="mx-auto w-full max-w-3xl px-6 py-10">
         <div className="mb-5">
           <span className="rounded-md bg-slate-900 px-2 py-0.5 text-xs font-semibold text-white">
-            upreview
+            UpReview
           </span>
         </div>
 

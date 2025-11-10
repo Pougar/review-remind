@@ -79,7 +79,7 @@ function TopNavFixed() {
             className="flex h-full items-center px-1 text-base font-extrabold tracking-tight text-slate-900"
             aria-label="Upreview — Home"
           >
-            Upreview
+            UpReview
           </Link>
 
           {/* Divider between brand and links */}
@@ -219,7 +219,7 @@ function GmailLikeEmail({ className = "" }: { className?: string }) {
             U
           </div>
           <div className="min-w-0">
-            <div className="truncate text-sm font-medium text-gray-900">Upreview</div>
+            <div className="truncate text-sm font-medium text-gray-900">UpReview</div>
             <div className="truncate text-[11px] text-gray-500">
               &lt;onboarding@upreview.app&gt;
             </div>
@@ -238,8 +238,8 @@ function GmailLikeEmail({ className = "" }: { className?: string }) {
         {/* Body */}
         <div className="px-4 py-4">
           <p className="text-sm text-gray-800">
-            Hi <strong>Alex</strong>, thanks for choosing <strong>Upreview</strong>. If you’re
-            happy, please share a public review. If anything fell short, tell us privately so we can
+            Hi <strong>Alex</strong>, thanks for choosing <strong>UpReview</strong>. If you’re
+            happy, please share a public review. If anything fell short, tell us so we can
             make it right.
           </p>
           <div className="mt-4 flex flex-wrap items-center gap-2">
@@ -499,7 +499,7 @@ function AnalyticsSection() {
 
           <p className="mt-6 max-w-md text-base md:text-lg text-slate-600">
             Track trends, spot bottlenecks, and know exactly where to focus.
-            Upreview turns raw feedback into clear signals that drive more
+            UpReview turns raw feedback into clear signals that drive more
             five-star reviews.
           </p>
 
@@ -601,7 +601,7 @@ const DEMO_CLIENTS: Array<{
     review_submitted_at: isoDaysAgo(1),
     sentiment: "good",
     review:
-      "Fantastic experience with Upreview — friendly staff and quick turnaround. Highly recommend!",
+      "Fantastic experience with UpReview — friendly staff and quick turnaround. Highly recommend!",
     invoice_status: "PAID",
   },
   {
@@ -818,7 +818,7 @@ function EmailPreviewDemo() {
   return (
     <div className="rounded-2xl border border-gray-200 bg-white p-6 shadow-sm">
       <div className="text-sm text-gray-500 mb-3">
-        From: Upreview &lt;onboarding@resend.dev&gt;
+        From: UpReview &lt;onboarding@resend.dev&gt;
       </div>
       <div className="prose prose-sm max-w-none">
         <h3 className="m-0">We’d love your feedback</h3>
@@ -826,7 +826,7 @@ function EmailPreviewDemo() {
           Hi <strong>Alex</strong>,
         </p>
         <p>
-          Thanks for choosing <strong>Upreview</strong>. Your experience matters
+          Thanks for choosing <strong>UpReview</strong>. Your experience matters
           to us, and your feedback helps us improve. If you’re happy, please
           share a public review. If anything fell short, tell us privately so we
           can make it right.
@@ -926,7 +926,7 @@ function ReviewSubmitModal({
   const generate = useCallback(() => {
     const chosen = selected.length ? selected : DEMO_GOOD_PHRASES.slice(0, 3);
     const list = chosen.map((s) => s.toLowerCase()).join(", ");
-    const out = `I had a great experience with Upreview — ${list}. Booking was easy and the team was professional. Highly recommend!`;
+    const out = `I had a great experience with UpReview — ${list}. Booking was easy and the team was professional. Highly recommend!`;
     setText(out);
   }, [selected]);
 

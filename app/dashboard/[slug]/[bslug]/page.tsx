@@ -288,7 +288,7 @@ export default function DashboardPage() {
             <div className="flex flex-col gap-3 rounded-xl border border-gray-200 bg-white p-4 text-sm text-gray-800 shadow-sm sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <span className="font-medium">Looks like your account is not even a week old!</span>{" "}
-                Click the tutorial to get an introduction to Upreview.
+                Click the tutorial to get an introduction to UpReview.
               </div>
               <button
                 type="button"
@@ -422,7 +422,7 @@ export default function DashboardPage() {
             <div className="mb-4 flex items-center justify-between">
               <h2 className="text-lg font-semibold text-gray-900">
                 {/* Personalize with the user's display name */}
-                Welcome to Upreview{display ? `, ${display}` : ""}
+                Welcome to UpReview{display ? `, ${display}` : ""}
               </h2>
               <button
                 type="button"
