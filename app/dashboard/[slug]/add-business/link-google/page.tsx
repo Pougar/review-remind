@@ -33,6 +33,33 @@ export default function LinkGooglePage() {
 
   const disabled = isPending || !userId || checking || working;
 
+  // Map technical error messages to user-friendly messages
+  const formatErrorMessage = useCallback((error: string | undefined | null): string => {
+    if (!error) return "An error occurred. Please try again.";
+    
+    const lowerError = error.toLowerCase();
+    
+    // Map specific error codes and messages
+    if (lowerError.includes("invalid_input") || lowerError.includes("invalid input")) {
+      return "Please check your input and try again.";
+    }
+    
+    if (lowerError.includes("expired") || lowerError.includes("token expired")) {
+      return "Google connection expired. Please reconnect your Google account.";
+    }
+    
+    if (lowerError.includes("no google connection") || lowerError.includes("not connected")) {
+      return "No Google connection found. Please connect your Google account first.";
+    }
+    
+    if (lowerError.includes("failed to create") || lowerError.includes("unexpected server response")) {
+      return "Unable to create business from Google. Please try again.";
+    }
+    
+    // Return original message if no mapping found (might already be user-friendly)
+    return error;
+  }, []);
+
   // Derive a visual style for the status message (purely presentational)
   const statusVariant = useMemo(() => {
     if (!statusMsg) return "idle" as const;
@@ -98,12 +125,12 @@ export default function LinkGooglePage() {
       }
       return { connected, scopeOk };
     } catch (e: unknown) {
-      setStatusMsg(e instanceof Error ? e.message : "Could not verify Google connection.");
+      setStatusMsg(formatErrorMessage(e instanceof Error ? e.message : "Could not verify Google connection."));
       return { connected: false, scopeOk: false };
     } finally {
       setChecking(false);
     }
-  }, [userId]);
+  }, [userId, formatErrorMessage]);
 
   const createBusinessFromGoogle = useCallback(
     async (): Promise<{ businessId: string; slug: string } | null> => {
@@ -127,7 +154,17 @@ export default function LinkGooglePage() {
         }
         if (!r.ok) {
           const msg = await r.text().catch(() => "");
-          setStatusMsg(msg || "Failed to create business from Google.");
+          let errorMsg = msg || "Failed to create business from Google.";
+          if (msg) {
+            try {
+              const errorData = JSON.parse(msg) as { error?: string; message?: string };
+              errorMsg = errorData?.error || errorData?.message || msg;
+            } catch {
+              // If not JSON, use the text as-is
+              errorMsg = msg;
+            }
+          }
+          setStatusMsg(formatErrorMessage(errorMsg));
           return null;
         }
         const json = (await r.json().catch(() => ({}))) as { businessId?: string; slug?: string };
@@ -140,7 +177,7 @@ export default function LinkGooglePage() {
         setWorking(false);
       }
     },
-    [userId]
+    [userId, formatErrorMessage]
   );
 
   const recordGoogleConnected = useCallback(async (businessId: string) => {

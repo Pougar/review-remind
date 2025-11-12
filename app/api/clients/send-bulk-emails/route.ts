@@ -3,6 +3,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { Pool, PoolClient } from "pg";
 import { Resend } from "resend";
 import { auth } from "@/app/lib/auth";
+import { supabaseAdmin } from "@/app/lib/supabaseServer";
+import { generateReviewEmail } from "@/app/lib/email-template";
 import crypto from "crypto";
 
 export const runtime = "nodejs";
@@ -34,27 +36,44 @@ if (!RAW_TOKEN_SECRET) {
 const TOKEN_SECRET: string = RAW_TOKEN_SECRET;
 
 const BASE_URL =
-  process.env.APP_ORIGIN ||
-  "https://www.upreview.com.au";
+  process.env.APP_ORIGIN || "https://www.upreview.com.au";
 
-// Your verified Resend domain + fallback sender
-const RESEND_DOMAIN =
+// Resend domain (sanitise leading @ if misconfigured)
+const RAW_RESEND_DOMAIN =
   process.env.RESEND_DOMAIN || "reminders.upreview.com.au";
+const RESEND_DOMAIN = RAW_RESEND_DOMAIN.replace(/^@+/, "");
 
+// Fallback sender (still on the reminders subdomain)
 const FALLBACK_FROM_EMAIL =
   process.env.RESEND_FROM || `no-reply@${RESEND_DOMAIN}`;
 
+// Private bucket for company logos
+const LOGO_BUCKET = "company-logos";
+const LOGO_SIGNED_TTL = 60 * 60 * 24; // 24h
+
+// Thumbs from env (public, can be any CDN/Supabase public bucket)
+const THUMB_UP_URL = process.env.EMAIL_HAPPY_URL || "";
+const THUMB_DOWN_URL = process.env.EMAIL_SAD_URL || "";
+
 /* ---------- Helpers ---------- */
-function escapeHtml(s: string) {
-  return s
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;");
-}
-function nl2br(s: string) {
-  return escapeHtml(s).replace(/\n/g, "<br>");
+async function getLogoSignedUrl(path: string | null | undefined): Promise<string | null> {
+  if (!path || !path.trim()) return null;
+
+  try {
+    const { data, error } = await supabaseAdmin.storage
+      .from(LOGO_BUCKET)
+      .createSignedUrl(path, LOGO_SIGNED_TTL);
+
+    if (error || !data?.signedUrl) {
+      console.error("[send-bulk-emails] createSignedUrl error:", error);
+      return null;
+    }
+
+    return data.signedUrl;
+  } catch (err) {
+    console.error("[send-bulk-emails] Supabase logo error:", err);
+    return null;
+  }
 }
 
 const CUSTOMER_TOKEN_REGEX = /\[customer\]/gi;
@@ -81,17 +100,6 @@ function signLinkToken({
   return Buffer.from(payloadJson).toString("base64url") + "." + sig;
 }
 
-function looksLikePublicMailbox(addr: string): boolean {
-  const lower = addr.toLowerCase();
-  return (
-    lower === "" ||
-    lower.endsWith("@gmail.com") ||
-    lower.endsWith("@yahoo.com") ||
-    lower.endsWith("@outlook.com") ||
-    lower.endsWith("@hotmail.com")
-  );
-}
-
 function makeSenderLocalPart(slug?: string | null): string | null {
   if (!slug) return null;
   const cleaned = slug
@@ -111,9 +119,10 @@ type ReqBody = {
 type TemplateRow = {
   business_display_name: string | null;
   business_email: string | null;
-  business_slug: string | null; // NEW
+  business_slug: string | null;
   email_subject: string | null;
   email_body: string | null;
+  company_logo_url: string | null; // path in private bucket (e.g. "bid/logo.png")
 };
 
 type ClientRow = {
@@ -177,6 +186,7 @@ export async function POST(req: NextRequest) {
         b.display_name AS business_display_name,
         b.business_email AS business_email,
         b.slug AS business_slug,
+        b.company_logo_url AS company_logo_url,
         COALESCE(t.email_subject, 'Please leave us a review!') AS email_subject,
         COALESCE(
           t.email_body,
@@ -242,23 +252,21 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // ---------- From header: business name + slug-based address ----------
+  // ---------- Get logo signed URL (once for all emails) ----------
+  const logoUrl = await getLogoSignedUrl(templateData.company_logo_url);
+
+  // ---------- From header: always slug@reminders... (not business email) ----------
 
   const businessDisplayName =
     (templateData.business_display_name || "Our Team").trim();
 
-  const businessEmail = (templateData.business_email || "").trim();
   const businessSlug = templateData.business_slug || null;
-
   const slugLocal = makeSenderLocalPart(businessSlug);
-  const slugBasedFrom = slugLocal
-    ? `${slugLocal}@${RESEND_DOMAIN}`
-    : null;
 
-  const senderAddress =
-    (!looksLikePublicMailbox(businessEmail) && businessEmail) ||
-    slugBasedFrom ||
-    FALLBACK_FROM_EMAIL;
+  // If we have a slug, use [slug]@RESEND_DOMAIN; otherwise fallback
+  const senderAddress = slugLocal
+    ? `${slugLocal}@${RESEND_DOMAIN}`
+    : FALLBACK_FROM_EMAIL;
 
   const baseFromHeader = `"${businessDisplayName}" <${senderAddress}>`;
 
@@ -315,70 +323,20 @@ export async function POST(req: NextRequest) {
       businessId
     )}&token=${encodeURIComponent(token)}`;
 
-    // 4. Email bodies
-    const text = `Hi ${clientName},
+    // 4. Generate email using shared template
+    const { html, text } = generateReviewEmail({
+      logoUrl,
+      companyName: businessDisplayName,
+      clientName,
+      emailSubject: subj,
+      emailBody: bodyCore,
+      goodReviewHref: goodHref,
+      badReviewHref: badHref,
+      thumbUpUrl: THUMB_UP_URL || null,
+      thumbDownUrl: THUMB_DOWN_URL || null,
+    });
 
-${bodyCore}
-
-Happy with our service? Please leave us a public review:
-${goodHref}
-
-Not happy? Tell us privately so we can fix it:
-${badHref}
-
-Best regards,
-${businessDisplayName}
-`;
-
-    const html = `
-      <p>Hi ${escapeHtml(clientName)},</p>
-
-      <p>${nl2br(bodyCore)}</p>
-
-      <div style="margin:24px 0;">
-        <a
-          href="${goodHref}"
-          style="
-            background:#16a34a;
-            color:#ffffff;
-            padding:12px 24px;
-            text-decoration:none;
-            font-family:Arial, sans-serif;
-            font-size:16px;
-            font-weight:bold;
-            border-radius:6px;
-            display:inline-block;
-            margin-right:12px;
-          "
-        >
-          Happy
-        </a>
-
-        <a
-          href="${badHref}"
-          style="
-            background:#dc2626;
-            color:#ffffff;
-            padding:12px 24px;
-            text-decoration:none;
-            font-family:Arial, sans-serif;
-            font-size:16px;
-            font-weight:bold;
-            border-radius:6px;
-            display:inline-block;
-          "
-        >
-          Unsatisfied
-        </a>
-      </div>
-
-      <p>
-        Best regards,<br>
-        ${escapeHtml(businessDisplayName)}
-      </p>
-    `.trim();
-
-    // 5. Send via Resend with consistent from header
+    // 5. Send via Resend with consistent from header (slug@reminders...)
     const sendResult: ResendSendResult = await resend.emails.send({
       from: baseFromHeader,
       to: [client.email],

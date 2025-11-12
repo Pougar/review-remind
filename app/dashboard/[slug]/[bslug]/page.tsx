@@ -1,7 +1,7 @@
 // app/dashboard/[slug]/[bslug]/page.tsx
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useSearchParams } from "next/navigation";
 import { useUser } from "@/app/lib/UserContext";
 import { authClient } from "@/app/lib/auth-client";
@@ -15,7 +15,7 @@ type RecentReview = {
   review_id: string;
   client_id: string | null;
   client_name: string | null;
-  is_primary: "google" | "internal";
+  is_primary: "google" | "UpReview";
   sentiment: boolean | null;
   stars: number | null;
   review: string;
@@ -34,7 +34,7 @@ type ApiRecentReview = {
   review_id?: string;
   client_id?: string | null;
   client_name?: string | null;
-  is_primary?: "google" | "internal" | string;
+  is_primary?: "google" | "UpReview" | string;
   sentiment?: boolean | null;
   stars?: number | null;
   review?: string;
@@ -200,7 +200,7 @@ export default function DashboardPage() {
           review_id: String(r.review_id ?? ""),
           client_id: r.client_id ?? null,
           client_name: typeof r.client_name === "string" ? r.client_name : null,
-          is_primary: (r.is_primary === "google" ? "google" : "internal") as "google" | "internal",
+          is_primary: (r.is_primary === "google" ? "google" : "UpReview") as "google" | "UpReview",
           sentiment: typeof r.sentiment === "boolean" ? r.sentiment : null,
           stars: Number.isFinite(r.stars as number) ? Number(r.stars) : null,
           review: String(r.review ?? ""),
@@ -231,8 +231,44 @@ export default function DashboardPage() {
   const [syncing, setSyncing] = useState(false);
   const [syncErr, setSyncErr] = useState<string | null>(null);
   const [syncOk, setSyncOk] = useState<string | null>(null);
+  
+  // Date picker state for import reviews
+  const [datePickerOpen, setDatePickerOpen] = useState(false);
+  const [year, setYear] = useState("");
+  const [month, setMonth] = useState("");
+  const [day, setDay] = useState("");
+  const datePickerRef = useRef<HTMLDivElement | null>(null);
 
-  async function handleSyncReviews() {
+  useEffect(() => {
+    function onDocClick(e: MouseEvent) {
+      if (!datePickerRef.current) return;
+      if (!datePickerRef.current.contains(e.target as Node)) setDatePickerOpen(false);
+    }
+    if (datePickerOpen) document.addEventListener("mousedown", onDocClick);
+    return () => document.removeEventListener("mousedown", onDocClick);
+  }, [datePickerOpen]);
+
+  const formattedDateFrom = useMemo(() => {
+    if (!year && !month && !day) return null;
+    const y = year.padStart(4, "0");
+    const m = month.padStart(2, "0");
+    const d = day.padStart(2, "0");
+    return `${y}-${m}-${d}`;
+  }, [year, month, day]);
+
+  const dateValid = useMemo(() => {
+    if (!year || !month || !day) return false;
+    const y = Number(year);
+    const m = Number(month);
+    const d = Number(day);
+    if (!Number.isInteger(y) || y < 1900 || y > 2100) return false;
+    if (!Number.isInteger(m) || m < 1 || m > 12) return false;
+    const maxDay = new Date(y, m, 0).getDate();
+    if (!Number.isInteger(d) || d < 1 || d > maxDay) return false;
+    return true;
+  }, [year, month, day]);
+
+  async function handleSyncReviews(dateFrom?: string | null) {
     if (!userId) return;
     const bid = resolvedBusinessId || businessId;
     if (!bid) {
@@ -245,10 +281,15 @@ export default function DashboardPage() {
     setSyncOk(null);
 
     try {
+      const body: { business_id: string; dateFrom?: string } = { business_id: bid };
+      if (dateFrom && dateFrom.trim()) {
+        body.dateFrom = dateFrom.trim();
+      }
+
       const res = await fetch(API.GOOGLE_GET_REVIEWS, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ business_id: bid }),
+        body: JSON.stringify(body),
         cache: "no-store",
       });
 
@@ -267,6 +308,12 @@ export default function DashboardPage() {
 
       // Refresh recent reviews panel
       setRefreshTick((t) => t + 1);
+      
+      // Close date picker if open
+      setDatePickerOpen(false);
+      setYear("");
+      setMonth("");
+      setDay("");
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : "Failed to sync Google reviews.";
       setSyncErr(msg);
@@ -308,7 +355,7 @@ export default function DashboardPage() {
           </h2>
           <div className="mt-6">
             {/* Pass business context so analytics are business-scoped */}
-            <ReviewsGraph userId={userId} businessSlug={businessSlug} months={12} />
+            <ReviewsGraph userId={userId} businessSlug={businessSlug} months={12} refreshKey={refreshTick} />
           </div>
         </section>
 
@@ -322,11 +369,11 @@ export default function DashboardPage() {
               Recent reviews
             </h2>
 
-            <div className="flex items-center gap-2">
+            <div className="relative flex items-center gap-2">
               {/* --- Get reviews from Google button --- */}
               <button
                 type="button"
-                onClick={handleSyncReviews}
+                onClick={() => setDatePickerOpen(true)}
                 disabled={syncDisabled}
                 className={`rounded-lg px-3 py-1.5 text-sm font-semibold text-white focus:outline-none focus:ring-2 ${
                   syncDisabled ? "bg-indigo-300 cursor-not-allowed" : "bg-indigo-600 hover:bg-indigo-700 focus:ring-indigo-400"
@@ -337,11 +384,104 @@ export default function DashboardPage() {
                     ? "Resolving business…"
                     : !resolvedBusinessId && !businessId
                     ? "Business not resolved yet"
-                    : "Fetch Google reviews"
+                    : "Import reviews from Google"
                 }
               >
-                {syncing ? "Syncing…" : "Get reviews from Google"}
+                Import reviews from Google
               </button>
+
+              {/* Date Picker Popup */}
+              {datePickerOpen && (
+                <div
+                  ref={datePickerRef}
+                  role="dialog"
+                  aria-label="Choose date to import reviews after"
+                  className="absolute right-0 top-12 z-50 w-[320px] rounded-xl border border-gray-200 bg-white p-4 shadow-xl"
+                  onKeyDown={(e) => e.key === "Escape" && setDatePickerOpen(false)}
+                >
+                  {syncing ? (
+                    <div className="flex flex-col items-center justify-center py-8">
+                      <div className="mb-4 h-8 w-8 animate-spin rounded-full border-4 border-indigo-200 border-t-indigo-600"></div>
+                      <p className="text-sm font-medium text-gray-900">This may take a minute or two</p>
+                      <p className="mt-1 text-xs text-gray-600">Please don't leave this page</p>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="mb-2 text-sm font-semibold text-gray-800">
+                        Import reviews since
+                      </div>
+
+                      <div className="mb-2 grid grid-cols-3 gap-2">
+                        <NumericInput
+                          label="Year (YYYY)"
+                          value={year}
+                          onChange={setYear}
+                          maxLength={4}
+                          placeholder="YYYY"
+                          focusColor="indigo"
+                        />
+                        <NumericInput
+                          label="Month (MM)"
+                          value={month}
+                          onChange={setMonth}
+                          maxLength={2}
+                          placeholder="MM"
+                          focusColor="indigo"
+                        />
+                        <NumericInput
+                          label="Day (DD)"
+                          value={day}
+                          onChange={setDay}
+                          maxLength={2}
+                          placeholder="DD"
+                          focusColor="indigo"
+                          onEnter={() => dateValid && handleSyncReviews(formattedDateFrom)}
+                        />
+                      </div>
+
+                      <div className="mb-2 text-xs text-gray-500">
+                        Example: <code>2025</code> / <code>06</code> / <code>01</code>
+                      </div>
+                      {!dateValid && (year || month || day) && (
+                        <div className="mb-3 rounded-md bg-red-50 px-3 py-2 text-xs text-red-700">
+                          Please enter a valid date.
+                        </div>
+                      )}
+
+                      <div className="flex items-center justify-end gap-2">
+                        <button
+                          type="button"
+                          className="rounded-lg px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-100"
+                          onClick={() => {
+                            setYear("");
+                            setMonth("");
+                            setDay("");
+                            setDatePickerOpen(false);
+                          }}
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="button"
+                          disabled={year || month || day ? !dateValid : false}
+                          className="rounded-lg bg-indigo-600 px-3 py-2 text-sm font-medium text-white shadow hover:bg-indigo-700 disabled:opacity-60"
+                          onClick={() => {
+                            const dateFrom =
+                              year || month || day
+                                ? dateValid
+                                  ? formattedDateFrom
+                                  : null
+                                : null;
+                            handleSyncReviews(dateFrom ?? undefined);
+                          }}
+                        >
+                          Import
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
 
               {/* Pagination controls */}
               <div className="flex items-center gap-2">
@@ -473,12 +613,12 @@ function SentimentChip({ v }: { v?: string | boolean | null }) {
   return <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ring-1 ${styles}`}>{label}</span>;
 }
 
-function SourceBadge({ source }: { source: "google" | "internal" }) {
+function SourceBadge({ source }: { source: "google" | "UpReview" }) {
   const isGoogle = source === "google";
   const styles = isGoogle ? "bg-blue-50 text-blue-700 ring-blue-200" : "bg-gray-50 text-gray-700 ring-gray-200";
   return (
     <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium ring-1 ${styles}`}>
-      {isGoogle ? "Google" : "Internal"}
+      {isGoogle ? "Google" : "UpReview"}
     </span>
   );
 }
@@ -497,7 +637,7 @@ function Stars({ value }: { value: number | null }) {
 function RecentReviewCard({ review }: { review: RecentReview }) {
   const dt = review.updated_at ?? review.created_at;
   const dateFmt = dt ? new Date(dt).toLocaleDateString() : "";
-  const title = review.client_name ?? (review.is_primary === "google" ? "Google review" : "Internal review");
+  const title = review.client_name ?? (review.is_primary === "google" ? "Google review" : "UpReview review");
 
   return (
     <div className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm ring-1 ring-black/5 transition hover:shadow-md">
@@ -528,5 +668,50 @@ function RecentReviewCard({ review }: { review: RecentReview }) {
         {review.review}
       </p>
     </div>
+  );
+}
+
+function NumericInput({
+  label,
+  value,
+  onChange,
+  maxLength,
+  placeholder,
+  focusColor = "indigo",
+  onEnter,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  maxLength: number;
+  placeholder: string;
+  focusColor?: "indigo" | "emerald" | "blue" | "sky";
+  onEnter?: () => void;
+}) {
+  const focusClass =
+    focusColor === "blue"
+      ? "focus:border-blue-500"
+      : focusColor === "sky"
+      ? "focus:border-sky-500"
+      : focusColor === "emerald"
+      ? "focus:border-emerald-500"
+      : "focus:border-indigo-500";
+
+  return (
+    <input
+      inputMode="numeric"
+      pattern="\\d*"
+      maxLength={maxLength}
+      placeholder={placeholder}
+      value={value}
+      onChange={(e) =>
+        onChange(
+          e.target.value.replace(/\D/g, "").slice(0, maxLength)
+        )
+      }
+      className={`w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none ${focusClass}`}
+      aria-label={label}
+      onKeyDown={(e) => e.key === "Enter" && onEnter?.()}
+    />
   );
 }

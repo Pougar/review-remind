@@ -330,7 +330,7 @@ async function upsertOneReviewByBusiness(
 
 /* ---------------- Route ---------------- */
 
-type ReqBody = { business_id?: string };
+type ReqBody = { business_id?: string; dateFrom?: string };
 
 export async function POST(req: NextRequest) {
   let client: PoolClient | null = null;
@@ -360,6 +360,19 @@ export async function POST(req: NextRequest) {
         { error: "BAD_REQUEST", message: "business_id is required in body." },
         { status: 400 }
       );
+    }
+
+    // Parse and validate dateFrom if provided (format: YYYY-MM-DD)
+    let dateFromFilter: Date | null = null;
+    if (body.dateFrom && typeof body.dateFrom === "string" && body.dateFrom.trim()) {
+      const dateStr = body.dateFrom.trim();
+      // Validate format YYYY-MM-DD
+      if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+        const parsedDate = new Date(`${dateStr}T00:00:00Z`);
+        if (!isNaN(parsedDate.getTime())) {
+          dateFromFilter = parsedDate;
+        }
+      }
     }
 
     // Ensure we have a fresh Google access token (refresh if needed)
@@ -511,8 +524,18 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // Filter reviews by dateFrom if provided
+    let filteredReviews = all;
+    if (dateFromFilter) {
+      filteredReviews = all.filter((r) => {
+        if (!r.createTime) return false;
+        const reviewDate = new Date(r.createTime);
+        return !isNaN(reviewDate.getTime()) && reviewDate >= dateFromFilter;
+      });
+    }
+
     // Upsert reviews keyed by business_id
-    for (const r of all) {
+    for (const r of filteredReviews) {
       await upsertOneReviewByBusiness(client, businessId, r);
     }
 
@@ -520,7 +543,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(
       {
         businessId,
-        total_reviews_returned: all.length,
+        total_reviews_returned: filteredReviews.length,
         averageRating: averageRating ?? null,
         totalReviewCount: totalReviewCount ?? null,
       },

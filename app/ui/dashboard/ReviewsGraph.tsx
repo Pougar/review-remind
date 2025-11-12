@@ -9,6 +9,7 @@ import {
   YAxis,
   Area,
   Line,
+  Tooltip,
 } from "recharts";
 import { API } from "@/app/lib/constants";
 
@@ -19,6 +20,8 @@ type Props = {
   /** Optional: scope to a specific business (recommended in the new app). */
   businessSlug?: string;
   months?: number; // default 12
+  /** Optional: refresh key to trigger data refetch */
+  refreshKey?: number;
 };
 
 type Monthly = {
@@ -37,7 +40,7 @@ function getErrorMessage(e: unknown): string {
   }
 }
 
-export default function ReviewsGraph({ userId, businessSlug, months = 12 }: Props) {
+export default function ReviewsGraph({ userId, businessSlug, months = 12, refreshKey }: Props) {
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [raw, setRaw] = useState<ApiPoint[]>([]);
@@ -72,7 +75,7 @@ export default function ReviewsGraph({ userId, businessSlug, months = 12 }: Prop
     return () => {
       alive = false;
     };
-  }, [userId, businessSlug]);
+  }, [userId, businessSlug, refreshKey]);
 
   const data: Monthly[] = useMemo(() => {
     const now = new Date();
@@ -174,23 +177,39 @@ export default function ReviewsGraph({ userId, businessSlug, months = 12 }: Prop
               </linearGradient>
             </defs>
 
+            {/* Tooltip for hover display */}
+            <Tooltip
+              content={({ active, payload }) => {
+                if (!active || !payload || !payload[0]) return null;
+                const data = payload[0].payload as Monthly;
+                return (
+                  <div className="rounded-lg border border-gray-200 bg-white px-3 py-2 shadow-lg">
+                    <p className="text-sm font-semibold text-gray-900">{data.label}</p>
+                    <p className="text-sm text-gray-700">
+                      <span className="font-medium">{data.total}</span> review{data.total === 1 ? "" : "s"}
+                    </p>
+                  </div>
+                );
+              }}
+            />
+
             {/* Soft area under the line */}
             <Area
-              type="monotone"
+              type="stepAfter"
               dataKey="total"
               stroke="none"
               fill="url(#totalArea)"
               isAnimationActive
             />
 
-            {/* Slate line for total */}
+            {/* Slate line for total with straight edges */}
             <Line
               dataKey="total"
-              type="monotone"
+              type="stepAfter"
               stroke={LINE}
               strokeWidth={2}
               dot={false}
-              activeDot={false}
+              activeDot={{ r: 4, fill: LINE }}
               isAnimationActive
             />
           </ComposedChart>

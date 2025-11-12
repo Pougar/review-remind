@@ -15,6 +15,7 @@ const DEFAULT_SINCE_ISO = "2025-01-01";
 
 /* ---------------- PG pool (singleton) ---------------- */
 declare global {
+  // eslint-disable-next-line no-var
   var _pgPoolXero: Pool | undefined;
 }
 function getPool(): Pool {
@@ -60,12 +61,14 @@ type XeroInvoice = {
   LineItems?: XeroLineItem[] | null;
   SentToContact?: boolean | null;
   Status?: string | null;
+  Type?: string | null; // <-- include invoice type so we can filter ACCREC only
 };
 type XeroInvoicesResponse = { Invoices?: XeroInvoice[] };
 type XeroContactsResponse = { Contacts?: XeroContact[] };
 
 /* ---------------- local types & utils ---------------- */
 type InvoiceStatus = "PAID" | "SENT" | "DRAFT" | "PAID BUT NOT SENT";
+
 const isUUID = (v: unknown): v is string =>
   typeof v === "string" && /^[0-9a-fA-F-]{36}$/.test(v);
 
@@ -108,7 +111,10 @@ function computeInvoiceStatus(
   if (isPaid) return sent ? "PAID" : "PAID BUT NOT SENT";
   return sent ? "SENT" : "DRAFT";
 }
-function buildSinceWhere(isoDate?: string): { where: string; sinceISO: string } {
+function buildSinceWhere(isoDate?: string): {
+  where: string;
+  sinceISO: string;
+} {
   const trimmed = (isoDate || "").trim();
   if (!trimmed) return { where: DEFAULT_SINCE_WHERE, sinceISO: DEFAULT_SINCE_ISO };
   const d = new Date(trimmed);
@@ -148,6 +154,10 @@ async function refreshAccessToken(
   return (await resp.json()) as XeroTokenResponse;
 }
 
+/**
+ * Discover contacts (by ContactID) from Xero Invoices.
+ * Now restricted to ACCREC* (sales) documents so we only consider true client-side activity.
+ */
 async function collectInvoiceContactData(
   accessToken: string,
   tenantId: string,
@@ -191,6 +201,13 @@ async function collectInvoiceContactData(
     if (list.length === 0) break;
 
     for (const inv of list) {
+      // ---- CHANGE #1: Only consider ACCREC* (sales) invoices/credits ----
+      const invType = (inv.Type || "").toUpperCase();
+      if (invType && !invType.startsWith("ACCREC")) {
+        // Skip ACCPAY, ACCPAYCREDIT, or any non-sales document
+        continue;
+      }
+
       const c = inv.Contact;
       const id = (c?.ContactID || "").trim();
       if (!id) continue;
@@ -285,7 +302,7 @@ async function upsertClientForBusiness(
   client: PoolClient,
   params: {
     businessId: string;
-    createdBy: string | null; // <-- allow NULL if not a UUID
+    createdBy: string | null; // allow NULL if not a UUID
     xeroContactId: string; // must be UUID from Xero
     nameIn: string;
     emailIn: string | null;
@@ -330,8 +347,7 @@ async function upsertClientForBusiness(
   );
   if (upByXero.rowCount && upByXero.rowCount > 0) return "updated";
 
-  // 2) INSERT (or merge on unique (business_id, email)); keep xero_contact_id as uuid
-  // NOTE: created_by has NO uuid cast now – DB will accept NULL or a UUID string if column is uuid.
+  // 2) INSERT (or merge on unique (business_id, email))
   const ins = await client.query<{ inserted: boolean }>(
     `
     INSERT INTO public.clients
@@ -436,14 +452,17 @@ export async function POST(req: NextRequest) {
     // Auth → set app.user_id for RLS; store created_by only if it's a UUID
     const session = await auth.api.getSession({ headers: req.headers });
     const userId = session?.user?.id || null;
-    if (!userId) return NextResponse.json({ error: "UNAUTHORIZED" }, { status: 401 });
+    if (!userId) {
+      return NextResponse.json({ error: "UNAUTHORIZED" }, { status: 401 });
+    }
     await client.query(`SELECT set_config('app.user_id', $1, true)`, [userId]);
 
     const createdByUuid = isUUID(userId) ? userId : null;
-    if (!createdByUuid)
+    if (!createdByUuid) {
       diag.notes.push(
         "created_by is not a UUID → storing NULL in clients.created_by"
       );
+    }
 
     // Build "since"
     let sinceWhere = DEFAULT_SINCE_WHERE;
@@ -482,7 +501,10 @@ export async function POST(req: NextRequest) {
     );
     if (xr.rowCount === 0) {
       return NextResponse.json(
-        { error: "NO_XERO_CONNECTION", message: "No Xero connection for this business." },
+        {
+          error: "NO_XERO_CONNECTION",
+          message: "No Xero connection for this business.",
+        },
         { status: 404 }
       );
     }
@@ -514,36 +536,56 @@ export async function POST(req: NextRequest) {
       diag.tokenRefreshed = true;
     }
 
-    // 3) Discover contacts via invoices
+    // 3) Discover contacts via invoices (ACCREC-only inside helper)
     diag.step = "discover-invoices";
     const discovered = await collectInvoiceContactData(
       access_token,
       tenantId,
       sinceWhere
     );
-    const contactIds = discovered.ids;
+
+    const rawContactIds = discovered.ids;
     diag.invoices = discovered.diag;
-    diag.counts.contactIdsFromInvoices = contactIds.length;
-    diag.samples.firstInvoiceContactIds = contactIds.slice(0, 10);
+    diag.counts.contactIdsFromInvoices = rawContactIds.length;
+    diag.samples.firstInvoiceContactIds = rawContactIds.slice(0, 10);
+
+    // ---- CHANGE #2: Filter to UUID ContactIDs before /Contacts + upserts ----
+    const contactIds = rawContactIds.filter(isUUID);
+    const invalidContactIds = rawContactIds.filter((id) => !isUUID(id));
+
+    if (invalidContactIds.length) {
+      diag.notes.push(
+        `Ignored ${invalidContactIds.length} non-UUID contact IDs from invoices (e.g. ${invalidContactIds
+          .slice(0, 5)
+          .join(", ")})`
+      );
+    }
 
     if (contactIds.length === 0) {
+      const countResult: QueryResult<{ cnt: number }> = await client.query(
+        `SELECT COUNT(*)::int AS cnt FROM public.clients WHERE business_id = $1 AND deleted_at IS NULL`,
+        [businessId]
+      );
+      const total = countResult.rows[0]?.cnt ?? 0;
+
       return NextResponse.json(
         {
           businessId,
           tenantId,
           since: sinceISO,
+          consideredFromInvoices: 0,
+          contactsFetched: 0,
+          customersOnly: 0,
           inserted: 0,
           updated: 0,
-          consideredFromInvoices: 0,
-          customersOnly: 0,
-          totalClientsForBusiness: 0,
+          totalClientsForBusiness: total,
           diag,
         },
         { status: 200 }
       );
     }
 
-    // 4) Fetch full contacts
+    // 4) Fetch full contacts for valid UUID IDs only
     diag.step = "fetch-contacts";
     const { contacts, diag: contactsDiag } = await fetchContactsByIds(
       access_token,
@@ -554,9 +596,10 @@ export async function POST(req: NextRequest) {
     diag.counts.contactsFetched = contacts.length;
 
     const contactMap = new Map<string, XeroContact>();
-    let isTrue = 0,
-      isFalse = 0,
-      isNull = 0;
+    let isTrue = 0;
+    let isFalse = 0;
+    let isNull = 0;
+
     for (const c of contacts) {
       const id = (c.ContactID || "").trim();
       if (!id) continue;
@@ -565,6 +608,7 @@ export async function POST(req: NextRequest) {
       else if (c.IsCustomer === false) isFalse += 1;
       else isNull += 1;
     }
+
     diag.counts.isCustomerTrue = isTrue;
     diag.counts.isCustomerFalse = isFalse;
     diag.counts.isCustomerNull = isNull;
@@ -591,11 +635,12 @@ export async function POST(req: NextRequest) {
         skippedNotCustomer.push(id);
         continue;
       }
+
       customersOnly += 1;
 
       const xeroContactId = (full.ContactID || "").trim();
       if (!isUUID(xeroContactId)) {
-        // We expect ContactID to be a GUID; if not, skip this contact.
+        // Should not happen after filter, but guard anyway.
         upsertErrors.push({
           contactId: id,
           error: "ContactID is not a UUID; skipping.",
@@ -605,10 +650,10 @@ export async function POST(req: NextRequest) {
       }
 
       const name =
-        (full?.Name || discovered.names.get(id) || "").trim() ||
+        (full.Name || discovered.names.get(id) || "").trim() ||
         "(Unknown Contact)";
-      const email = (full?.EmailAddress || null)?.toString() ?? null;
-      const phone = pickPhone(full?.Phones) || null;
+      const email = (full.EmailAddress || null)?.toString() ?? null;
+      const phone = pickPhone(full.Phones) || null;
       const itemDescription = discovered.descriptions.get(id) || null;
       const invoiceStatus = discovered.statusByContact.get(id) ?? null;
 
@@ -669,9 +714,20 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json(summary, { status: 200 });
   } catch (err: unknown) {
+    // ---- CHANGE #3: expose message + step to help debug mysterious failures ----
     const e = err instanceof Error ? err : new Error(String(err));
-    console.error("[/api/xero/get-clients-from-xero] error:", e.stack ?? e);
-    return NextResponse.json({ error: "SERVER_ERROR" }, { status: 500 });
+    console.error(
+      "[/api/xero/get-clients-from-xero] error:",
+      e.stack ?? e.message ?? e
+    );
+    return NextResponse.json(
+      {
+        error: "SERVER_ERROR",
+        message: e.message,
+        step: diag.step,
+      },
+      { status: 500 }
+    );
   } finally {
     client.release();
   }

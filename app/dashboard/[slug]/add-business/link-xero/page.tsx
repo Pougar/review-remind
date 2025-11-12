@@ -96,6 +96,43 @@ export default function LinkXeroPage() {
 
   // --- helpers ---
 
+  // Map technical error messages to user-friendly messages
+  const formatErrorMessage = useCallback((error: string | undefined | null): string => {
+    if (!error) return "An error occurred. Please try again.";
+    
+    const lowerError = error.toLowerCase();
+    
+    // Map specific error codes and messages
+    if (lowerError.includes("invalid_input") || lowerError.includes("invalid input")) {
+      if (lowerError.includes("businessid") || lowerError.includes("business id")) {
+        return "No Xero business linked to this account yet. Please complete the previous steps first.";
+      }
+      if (lowerError.includes("userid") || lowerError.includes("user id")) {
+        return "Please sign in to continue.";
+      }
+      return "Please check your input and try again.";
+    }
+    
+    if (lowerError.includes("missing or invalid business id")) {
+      return "No Xero business linked to this account yet. Please complete the previous steps first.";
+    }
+    
+    if (lowerError.includes("missing authorize url") || lowerError.includes("missing authorizeurl")) {
+      return "Unable to start Xero connection. Please try again.";
+    }
+    
+    if (lowerError.includes("failed to start xero connect") || lowerError.includes("failed to start")) {
+      return "Unable to connect to Xero. Please try again.";
+    }
+    
+    if (lowerError.includes("could not verify") || lowerError.includes("could not check")) {
+      return "Unable to verify Xero connection. Please try again.";
+    }
+    
+    // Return original message if no mapping found (might already be user-friendly)
+    return error;
+  }, []);
+
   // Check current onboarding stage and route accordingly
   const checkStageAndRoute = useCallback(async () => {
     if (!isUUID(businessId)) return;
@@ -111,7 +148,7 @@ export default function LinkXeroPage() {
 
       const data = (await res.json().catch(() => ({}))) as { stage?: Stage; error?: string };
       if (!res.ok) {
-        setStatusMsg(data?.error || "Could not check onboarding stage.");
+        setStatusMsg(formatErrorMessage(data?.error) || "Could not check onboarding stage.");
         return;
       }
 
@@ -169,10 +206,10 @@ export default function LinkXeroPage() {
       }
     } catch (e: unknown) {
       setStatusMsg(
-        e instanceof Error ? e.message : "Could not check onboarding stage."
+        formatErrorMessage(e instanceof Error ? e.message : "Could not check onboarding stage.")
       );
     }
-  }, [businessId, router, slug, nextDest]);
+  }, [businessId, router, slug, nextDest, formatErrorMessage]);
 
   const checkConnection = useCallback(async () => {
     if (!userId || !businessId) return { connected: false, tenantCount: 0 };
@@ -209,22 +246,24 @@ export default function LinkXeroPage() {
         );
       } else {
         setStatusMsg(
-          data?.error || "Could not verify Xero connection."
+          formatErrorMessage(data?.error) || "Could not verify Xero connection."
         );
       }
 
       return { connected, tenantCount };
     } catch (e: unknown) {
       setStatusMsg(
-        e instanceof Error
-          ? e.message
-          : "Could not verify Xero connection."
+        formatErrorMessage(
+          e instanceof Error
+            ? e.message
+            : "Could not verify Xero connection."
+        )
       );
       return { connected: false, tenantCount: 0 };
     } finally {
       setChecking(false);
     }
-  }, [userId, businessId]);
+  }, [userId, businessId, formatErrorMessage]);
 
   // On mount: auth guard + stage check; then if we remain on link-xero, also show connection status
   useEffect(() => {
@@ -245,7 +284,7 @@ export default function LinkXeroPage() {
     }
 
     if (!isUUID(businessId)) {
-      setStatusMsg("Missing or invalid business id.");
+      setStatusMsg("No Xero business linked to this account yet. Please complete the previous steps first.");
       return;
     }
 
@@ -290,7 +329,17 @@ export default function LinkXeroPage() {
 
       if (!res.ok) {
         const msg = await res.text().catch(() => "");
-        throw new Error(msg || "Failed to start Xero connect.");
+        let errorMsg = msg || "Failed to start Xero connect.";
+        if (msg) {
+          try {
+            const errorData = JSON.parse(msg) as { error?: string; message?: string };
+            errorMsg = errorData?.error || errorData?.message || msg;
+          } catch {
+            // If not JSON, use the text as-is
+            errorMsg = msg;
+          }
+        }
+        throw new Error(errorMsg);
       }
 
       const { authorizeUrl } = (await res
@@ -316,14 +365,16 @@ export default function LinkXeroPage() {
       }
     } catch (e: unknown) {
       setStatusMsg(
-        e instanceof Error
-          ? e.message
-          : "Failed to start Xero connect."
+        formatErrorMessage(
+          e instanceof Error
+            ? e.message
+            : "Failed to start Xero connect."
+        )
       );
     } finally {
       setConnectDisabled(false);
     }
-  }, [userId, businessId, slug]);
+  }, [userId, businessId, slug, formatErrorMessage]);
 
   const disabled =
     isPending ||

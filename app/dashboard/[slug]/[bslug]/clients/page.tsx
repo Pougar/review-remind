@@ -541,7 +541,7 @@ export default function ClientsPage() {
                 onKeyDown={(e) => e.key === "Escape" && setDateOpen(false)}
               >
                 <div className="mb-2 text-sm font-semibold text-gray-800">
-                  Clients after
+                  Import clients from invoices since
                 </div>
 
                 <div className="mb-2 grid grid-cols-3 gap-2">

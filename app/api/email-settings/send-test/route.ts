@@ -1,51 +1,61 @@
-// app/api/email-settings/send-test/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { Pool, PoolClient } from "pg";
 import { Resend } from "resend";
 import { auth } from "@/app/lib/auth";
 import { signMagicToken } from "@/app/lib/magic-token-signer";
+import { supabaseAdmin } from "@/app/lib/supabaseServer";
+import { generateReviewEmail } from "@/app/lib/email-template";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const resend = new Resend(process.env.RESEND_API_KEY);
 
-/* ---------- PG Pool ---------- */
-declare global {
-  // eslint-disable-next-line no-var
-  var _pgPoolSendTestEmailBiz: Pool | undefined;
-}
-
+/* ---------- PG Pool singleton (typed global) ---------- */
+const globalForPg = globalThis as unknown as { _pgPoolSendBulkBiz?: Pool };
 function getPool(): Pool {
-  if (!global._pgPoolSendTestEmailBiz) {
+  if (!globalForPg._pgPoolSendBulkBiz) {
     const cs = process.env.DATABASE_URL;
     if (!cs) throw new Error("DATABASE_URL is not set");
-    global._pgPoolSendTestEmailBiz = new Pool({
+
+    globalForPg._pgPoolSendBulkBiz = new Pool({
       connectionString: cs,
       ssl: { rejectUnauthorized: false },
       max: 5,
     });
   }
-  return global._pgPoolSendTestEmailBiz;
+  return globalForPg._pgPoolSendBulkBiz;
 }
+
+/* ---------- Constants ---------- */
+
+const CUSTOMER_TOKEN_REGEX = /\[customer\]/gi;
+
+const BASE_URL = process.env.APP_ORIGIN || "https://www.upreview.com.au";
+
+// ✅ your verified sending domain (sanitize leading '@' if present)
+const RAW_RESEND_DOMAIN =
+  process.env.RESEND_DOMAIN || "reminders.upreview.com.au";
+const RESEND_DOMAIN = RAW_RESEND_DOMAIN.replace(/^@+/, "");
+
+// Fallback if nothing else works
+const FALLBACK_FROM_EMAIL =
+  process.env.RESEND_FROM || `no-reply@${RESEND_DOMAIN}`;
+
+// Private bucket for company logos
+const LOGO_BUCKET = "company-logos";
+const LOGO_SIGNED_TTL = 60 * 60 * 24; // 24h
+
+// Thumbs from env (public, can be any CDN/Supabase public bucket)
+const THUMB_UP_URL = process.env.EMAIL_HAPPY_URL || "";
+const THUMB_DOWN_URL = process.env.EMAIL_SAD_URL || "";
 
 /* ---------- Helpers ---------- */
 
 const isUUID = (v?: string | null) => !!v && /^[0-9a-fA-F-]{36}$/.test(v);
 const emailLooksValid = (s: string) => /^\S+@\S+\.\S+$/.test(s);
 
-function escapeHtml(s: string) {
-  return s
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;");
-}
-
-function nl2br(s: string) {
-  return escapeHtml(s).replace(/\n/g, "<br>");
-}
+// Helper functions moved to email-template.ts
 
 function describeError(err: unknown) {
   if (err instanceof Error) {
@@ -61,27 +71,34 @@ function describeError(err: unknown) {
   }
 }
 
-const CUSTOMER_TOKEN_REGEX = /\[customer\]/gi;
-
-const BASE_URL =
-  process.env.APP_ORIGIN || "https://www.upreview.com.au";
-
-// ✅ your verified sending domain
-const RESEND_DOMAIN =
-  process.env.RESEND_DOMAIN || "reminders.upreview.com.au";
-
-// fallback if nothing else works
-const FALLBACK_FROM_EMAIL =
-  process.env.RESEND_FROM || `no-reply@${RESEND_DOMAIN}`;
-
 function makeSenderLocalPart(slug?: string | null): string | null {
   if (!slug) return null;
   const cleaned = slug
     .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-") // non alnum → hyphen
-    .replace(/^-+|-+$/g, "") // trim hyphens
-    .slice(0, 64); // be safe with length
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 64);
   return cleaned || null;
+}
+
+async function getLogoSignedUrl(path: string | null | undefined): Promise<string | null> {
+  if (!path || !path.trim()) return null;
+
+  try {
+    const { data, error } = await supabaseAdmin.storage
+      .from(LOGO_BUCKET)
+      .createSignedUrl(path, LOGO_SIGNED_TTL);
+
+    if (error || !data?.signedUrl) {
+      console.error("[send-test] createSignedUrl error:", error);
+      return null;
+    }
+
+    return data.signedUrl;
+  } catch (err) {
+    console.error("[send-test] Supabase logo error:", err);
+    return null;
+  }
 }
 
 /* ---------- Types ---------- */
@@ -93,10 +110,11 @@ type ReqBody = {
 
 type TemplateRow = {
   business_display_name: string | null;
-  business_email: string | null;
-  business_slug: string | null; // NEW
+  business_email: string | null; // not used as sender
+  business_slug: string | null;
   email_subject: string | null;
   email_body: string | null;
+  company_logo_url: string | null; // path in private bucket (e.g. "bid/logo.png")
 };
 
 /* ---------- Route ---------- */
@@ -147,18 +165,17 @@ export async function POST(req: NextRequest) {
 
   try {
     await db.query("BEGIN");
-    await db.query(`SELECT set_config('app.user_id', $1, true)`, [
-      senderUserId,
-    ]);
+    await db.query(`SELECT set_config('app.user_id', $1, true)`, [senderUserId]);
 
     const tplQ = await db.query<TemplateRow>(
       `
       SELECT
         b.display_name       AS business_display_name,
         b.business_email     AS business_email,
-        b.slug               AS business_slug,       -- make sure this matches your schema
+        b.slug               AS business_slug,
         et.email_subject     AS email_subject,
-        et.email_body        AS email_body
+        et.email_body        AS email_body,
+        b.company_logo_url   AS company_logo_url
       FROM public.businesses b
       LEFT JOIN public.email_templates et
         ON et.business_id = b.id
@@ -184,8 +201,9 @@ export async function POST(req: NextRequest) {
   } catch (err: unknown) {
     try {
       await db.query("ROLLBACK");
-    } catch {}
-    db.release();
+    } catch {
+      /* ignore */
+    }
 
     const info = describeError(err);
     console.error("[/api/email-settings/send-test] DB error:", info);
@@ -222,38 +240,24 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // 4) Build From header using business slug
+  // 4) Per-business logo (signed URL from private bucket)
+  const logoUrl = await getLogoSignedUrl(templateData.company_logo_url);
+
+  // 5) Build From header using business slug
 
   const businessDisplayName = (
     templateData.business_display_name || "Our Team"
   ).trim();
 
-  const rawFromEmail = (templateData.business_email || "").trim().toLowerCase();
-
-  const looksLikePublicMailbox =
-    rawFromEmail.endsWith("@gmail.com") ||
-    rawFromEmail.endsWith("@yahoo.com") ||
-    rawFromEmail.endsWith("@outlook.com") ||
-    rawFromEmail.endsWith("@hotmail.com") ||
-    rawFromEmail === "";
-
   const slugLocal = makeSenderLocalPart(templateData.business_slug);
-  const slugBasedFrom = slugLocal
+  const senderAddress = slugLocal
     ? `${slugLocal}@${RESEND_DOMAIN}`
-    : null;
+    : FALLBACK_FROM_EMAIL;
 
-  // Priority:
-  // 1) custom-domain business_email
-  // 2) slug@reminders.upreview.com.au
-  // 3) no-reply@reminders.upreview.com.au
-  const fromAddress =
-    (!looksLikePublicMailbox && rawFromEmail) ||
-    slugBasedFrom ||
-    FALLBACK_FROM_EMAIL;
+  const fromHeader = `"${businessDisplayName}" <${senderAddress}>`;
 
-  const fromHeader = `${businessDisplayName} <${fromAddress}>`;
+  // 6) Build content
 
-  // 5) Build content (unchanged)
   const clientName = "Customer";
   const clientId = "test";
 
@@ -286,14 +290,6 @@ export async function POST(req: NextRequest) {
   const finalSubject = baseSubject.replace(CUSTOMER_TOKEN_REGEX, clientName);
   const finalBody = baseBody.replace(CUSTOMER_TOKEN_REGEX, clientName);
 
-  const text = `Hi ${clientName},
-
-${finalBody}
-
-Best regards,
-${businessDisplayName}
-`;
-
   const goodHref = `${BASE_URL}/submit-review/${encodeURIComponent(
     clientId
   )}?type=good&businessId=${encodeURIComponent(
@@ -306,54 +302,20 @@ ${businessDisplayName}
     businessId
   )}&token=${encodeURIComponent(signedToken)}`;
 
-  const html = `
-    <p>Hi ${escapeHtml(clientName)},</p>
+  // Generate email using shared template
+  const { html, text } = generateReviewEmail({
+    logoUrl,
+    companyName: businessDisplayName,
+    clientName,
+    emailSubject: finalSubject,
+    emailBody: finalBody,
+    goodReviewHref: goodHref,
+    badReviewHref: badHref,
+    thumbUpUrl: THUMB_UP_URL || null,
+    thumbDownUrl: THUMB_DOWN_URL || null,
+  });
 
-    <p>${nl2br(finalBody)}</p>
-
-    <div style="margin:24px 0;">
-      <a
-        href="${goodHref}"
-        style="
-          background:#16a34a;
-          color:#ffffff;
-          padding:12px 24px;
-          text-decoration:none;
-          font-family:Arial, sans-serif;
-          font-size:16px;
-          font-weight:bold;
-          border-radius:6px;
-          display:inline-block;
-          margin-right:12px;
-        "
-      >
-        Happy
-      </a>
-      <a
-        href="${badHref}"
-        style="
-          background:#dc2626;
-          color:#ffffff;
-          padding:12px 24px;
-          text-decoration:none;
-          font-family:Arial, sans-serif;
-          font-size:16px;
-          font-weight:bold;
-          border-radius:6px;
-          display:inline-block;
-        "
-      >
-        Unsatisfied
-      </a>
-    </div>
-
-    <p>
-      Best regards,<br>
-      ${escapeHtml(businessDisplayName)}
-    </p>
-  `.trim();
-
-  // 6) Send
+  // 7) Send
   try {
     await resend.emails.send({
       from: fromHeader,
@@ -370,7 +332,7 @@ ${businessDisplayName}
       {
         error: "SEND_FAILED",
         message:
-          "We couldn't send the test email. Please confirm your Resend domain & sender configuration.",
+          "We couldn't send the test email. Please confirm your Resend domain, sender, and image URLs.",
         resendError: info.message,
       },
       { status: 500 }

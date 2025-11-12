@@ -97,6 +97,36 @@ export default function BusinessDetailsPage() {
   const emailValid = !businessEmail || /.+@.+\..+/.test(businessEmail.trim());
   const canSave = !!userId && !!businessId && !!displayName.trim() && emailValid && !saving;
 
+  // Map technical error messages to user-friendly messages
+  const formatErrorMessage = useCallback((error: string | undefined | null): string => {
+    if (!error) return "An error occurred. Please try again.";
+    
+    const lowerError = error.toLowerCase();
+    
+    // Map specific error codes and messages
+    if (lowerError.includes("invalid_input") || lowerError.includes("invalid input")) {
+      if (lowerError.includes("businessid") || lowerError.includes("business id")) {
+        return "Business information is missing. Please complete the previous steps first.";
+      }
+      return "Please check your input and try again.";
+    }
+    
+    if (lowerError.includes("slug") && (lowerError.includes("taken") || lowerError.includes("already"))) {
+      return "This business URL is already taken. Please choose a different one.";
+    }
+    
+    if (lowerError.includes("failed to load") || lowerError.includes("failed to save")) {
+      return "Unable to save business details. Please try again.";
+    }
+    
+    if (lowerError.includes("network error")) {
+      return "Network error. Please check your connection and try again.";
+    }
+    
+    // Return original message if no mapping found (might already be user-friendly)
+    return error;
+  }, []);
+
   // ---------- Status variant (purely visual; no logic change) ----------
   const statusVariant = useMemo(() => {
     if (!msg) return "idle" as const;
@@ -223,7 +253,7 @@ export default function BusinessDetailsPage() {
         }
       } catch (e: unknown) {
         if (!alive) return;
-        const message = e instanceof Error ? e.message : "Failed to verify onboarding stage.";
+        const message = formatErrorMessage(e instanceof Error ? e.message : "Failed to verify onboarding stage.");
         setMsg(message);
         setIsError(true);
       } finally {
@@ -259,7 +289,7 @@ export default function BusinessDetailsPage() {
         if (!alive) return;
 
         if (!res.ok) {
-          setMsg(data?.message || data?.error || "Failed to load business details.");
+          setMsg(formatErrorMessage(data?.message || data?.error) || "Failed to load business details.");
           setIsError(true);
         } else {
           setDisplayName(data?.display_name ?? "");
@@ -270,8 +300,9 @@ export default function BusinessDetailsPage() {
         }
       } catch (e: unknown) {
         if (!alive) return;
-        const message =
-          e instanceof Error ? e.message : "Network error loading business details.";
+        const message = formatErrorMessage(
+          e instanceof Error ? e.message : "Network error loading business details."
+        );
         setMsg(message);
         setIsError(true);
       } finally {
@@ -282,7 +313,7 @@ export default function BusinessDetailsPage() {
     return () => {
       alive = false;
     };
-  }, [allowLoad, businessId]);
+  }, [allowLoad, businessId, formatErrorMessage]);
 
   /* ---------- save + mark onboarded + redirect ---------- */
   const onSaveAndContinue = useCallback(async () => {
@@ -312,7 +343,7 @@ export default function BusinessDetailsPage() {
 
       const saveJson = await safeJson<SaveDetailsResp>(saveRes);
       if (!saveRes.ok) {
-        setMsg(saveJson?.message || saveJson?.error || "Could not save changes.");
+        setMsg(formatErrorMessage(saveJson?.message || saveJson?.error) || "Could not save changes.");
         setIsError(true);
         setSaving(false);
         return;
@@ -327,7 +358,7 @@ export default function BusinessDetailsPage() {
       }
 
       if (saveJson?.message) {
-        setMsg(saveJson.message); // e.g., slug taken, other fields saved
+        setMsg(formatErrorMessage(saveJson.message)); // e.g., slug taken, other fields saved
         setIsError(false);
       }
 
