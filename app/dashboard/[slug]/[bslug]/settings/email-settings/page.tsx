@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import { authClient } from "@/app/lib/auth-client";
 import { API } from "@/app/lib/constants";
+import { generateReviewEmail } from "@/app/lib/email-template";
 
 /* ============================ Helpers ============================ */
 const emailLooksValid = (s: string) => /^\S+@\S+\.\S+$/.test(s);
@@ -88,10 +89,42 @@ export default function BusinessEmailTemplateSettings() {
 
   const [previewOpen, setPreviewOpen] = useState<boolean>(false);
 
+  /* ---------- Preview data ---------- */
+  const [logoUrl, setLogoUrl] = useState<string | null>(null);
+  const [thumbUpUrl, setThumbUpUrl] = useState<string | null>(null);
+  const [thumbDownUrl, setThumbDownUrl] = useState<string | null>(null);
+
   /* ---------- Derived ---------- */
   const dirty = subject !== origSubject || body !== origBody;
   const toDisplay = useMemo(() => cap(previewRecipient) || "Customer", [previewRecipient]);
   const senderName = businessName || "Your company";
+
+  // Generate preview email HTML
+  const previewEmailHtml = useMemo(() => {
+    if (loading) return null;
+
+    const CUSTOMER_TOKEN_REGEX = /\[customer\]/gi;
+    const finalSubject = subject.replace(CUSTOMER_TOKEN_REGEX, toDisplay);
+    const finalBody = body.replace(CUSTOMER_TOKEN_REGEX, toDisplay);
+
+    // Use placeholder URLs for preview (won't actually work, but shows the structure)
+    const goodHref = "#";
+    const badHref = "#";
+
+    const { html } = generateReviewEmail({
+      logoUrl,
+      companyName: senderName,
+      clientName: toDisplay,
+      emailSubject: finalSubject,
+      emailBody: finalBody,
+      goodReviewHref: goodHref,
+      badReviewHref: badHref,
+      thumbUpUrl,
+      thumbDownUrl,
+    });
+
+    return html;
+  }, [loading, subject, body, toDisplay, senderName, logoUrl, thumbUpUrl, thumbDownUrl]);
 
   /* =========================================================
      Step 1: Resolve businessId from bslug
@@ -206,6 +239,44 @@ export default function BusinessEmailTemplateSettings() {
             // prefer display name from template call if provided
             const maybeDisplayName = cap(tmplData?.businessDisplayName);
             if (maybeDisplayName) setBusinessName(maybeDisplayName);
+          }
+        }
+
+        /* ----- (C) Get logo URL for preview ----- */
+        if (alive && businessId) {
+          try {
+            const logoRes = await fetch(API.RETRIEVE_LOGO_URL, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              cache: "no-store",
+              body: JSON.stringify({ businessId }),
+            });
+            const logoData = await safeJson<{ url?: string | null }>(logoRes);
+            if (alive && logoRes.ok) {
+              setLogoUrl(logoData?.url || null);
+            }
+          } catch {
+            // Non-fatal, just won't show logo in preview
+          }
+        }
+
+        /* ----- (D) Get email config (thumb URLs) ----- */
+        if (alive) {
+          try {
+            const configRes = await fetch("/api/email-settings/get-email-config", {
+              method: "GET",
+              cache: "no-store",
+            });
+            const configData = await safeJson<{
+              thumbUpUrl?: string | null;
+              thumbDownUrl?: string | null;
+            }>(configRes);
+            if (alive && configRes.ok) {
+              setThumbUpUrl(configData?.thumbUpUrl || null);
+              setThumbDownUrl(configData?.thumbDownUrl || null);
+            }
+          } catch {
+            // Non-fatal, will use button fallback
           }
         }
       } catch {
@@ -513,49 +584,31 @@ export default function BusinessEmailTemplateSettings() {
                     {loading ? (
                       <span className="inline-block h-5 w-1/2 animate-pulse rounded bg-gray-200" />
                     ) : (
-                      subject
+                      (() => {
+                        const CUSTOMER_TOKEN_REGEX = /\[customer\]/gi;
+                        return subject.replace(CUSTOMER_TOKEN_REGEX, toDisplay);
+                      })()
                     )}
                   </div>
                 </div>
 
-                {/* Body */}
-                <div className="p-4">
-                  {loading ? (
+                {/* Body - Email HTML Preview */}
+                <div className="p-0">
+                  {loading || !previewEmailHtml ? (
                     <>
-                      <div className="mb-2 h-4 w-7/12 animate-pulse rounded bg-gray-200" />
-                      <div className="mb-2 h-4 w-10/12 animate-pulse rounded bg-gray-200" />
-                      <div className="mb-2 h-4 w-9/12 animate-pulse rounded bg-gray-200" />
-                      <div className="h-4 w-6/12 animate-pulse rounded bg-gray-200" />
+                      <div className="p-4">
+                        <div className="mb-2 h-4 w-7/12 animate-pulse rounded bg-gray-200" />
+                        <div className="mb-2 h-4 w-10/12 animate-pulse rounded bg-gray-200" />
+                        <div className="mb-2 h-4 w-9/12 animate-pulse rounded bg-gray-200" />
+                        <div className="h-4 w-6/12 animate-pulse rounded bg-gray-200" />
+                      </div>
                     </>
                   ) : (
-                    <div className="space-y-4 text-gray-800">
-                      <p>Hi {toDisplay || "Customer"},</p>
-
-                      <p className="whitespace-pre-wrap">{body}</p>
-
-                      <div className="mt-6 flex gap-3">
-                        <a
-                          href="#"
-                          className="inline-block rounded-md bg-green-600 px-3 py-1.5 text-sm font-semibold text-white no-underline hover:bg-green-700"
-                          onClick={(e) => e.preventDefault()}
-                        >
-                          Happy
-                        </a>
-                        <a
-                          href="#"
-                          className="inline-block rounded-md bg-red-600 px-3 py-1.5 text-sm font-semibold text-white no-underline hover:bg-red-700"
-                          onClick={(e) => e.preventDefault()}
-                        >
-                          Unsatisfied
-                        </a>
-                      </div>
-
-                      <p>
-                        Best regards,
-                        <br />
-                        {senderName}
-                      </p>
-                    </div>
+                    <div
+                      className="email-preview-container"
+                      dangerouslySetInnerHTML={{ __html: previewEmailHtml }}
+                      style={{ maxWidth: "100%", overflow: "auto" }}
+                    />
                   )}
                 </div>
               </div>
