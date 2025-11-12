@@ -403,7 +403,7 @@ export default function DashboardPage() {
                     <div className="flex flex-col items-center justify-center py-8">
                       <div className="mb-4 h-8 w-8 animate-spin rounded-full border-4 border-indigo-200 border-t-indigo-600"></div>
                       <p className="text-sm font-medium text-gray-900">This may take a minute or two</p>
-                      <p className="mt-1 text-xs text-gray-600">Please don't leave this page</p>
+                      <p className="mt-1 text-xs text-gray-600">Please don&apos;t leave this page</p>
                     </div>
                   ) : (
                     <>
